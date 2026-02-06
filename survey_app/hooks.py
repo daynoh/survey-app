@@ -8,7 +8,20 @@ app_license = "mit"
 
 # Includes in <head>
 # ------------------
+# survey_app/hooks.py
+# app_include_js = "/assets/survey_app/js/survey.jquery.min.js"
+# app_include_css = "/assets/survey_app/css/survey.min.css"
+web_include_css = "/assets/survey_app/css/survey.min.css"
+web_include_js = [
+    "/assets/survey_app/js/survey.jquery.min.js",
+    # "/assets/survey_app/js/survey_web_form.js",
+]
 
+# web_include_css = "/assets/survey_app/css/survey.min.css"
+# web_include_js = [
+#     "/assets/survey_app/js/survey.jquery.min.js",
+#     "/assets/survey_app/js/survey_web_form.js",
+# ]
 # include js, css files in header of desk.html
 # app_include_css = "/assets/survey_app/css/survey_app.css"
 # app_include_js = "/assets/survey_app/js/survey_app.js"
