@@ -65,6 +65,11 @@ web_include_js = [
 # Generators
 # ----------
 
+website_route_rules = [
+    {"from_route": "/survey/<survey_name>", "to_route": "survey"}
+]
+
+
 # automatically create page for each record of this doctype
 # website_generators = ["Web Page"]
 

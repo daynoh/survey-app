@@ -3,62 +3,88 @@
 
 frappe.ui.form.on("Survey Questions", {
 	refresh(frm) {
-        frappe.ready(function() {
-    // 1. Setup the Survey Container
-    // We hide the standard Frappe form and inject our own div
-    $(".form-body").hide(); 
-    $('<div id="surveyElement" style="display:inline-block;width:100%;height:100%;"></div>').insertAfter(".form-body");
+// web page js begin
 
-    // 2. Fetch the dynamic Survey Model from your Python backend
+frappe.ready(function() {
+    // 1️⃣ Robust Extraction of survey name
+    // This works even if the URL has query parameters or extra slashes
+    const pathSegments = window.location.pathname.split('/').filter(Boolean);
+    const survey_name = pathSegments[pathSegments.length - 1]; 
+
+    if (!survey_name || survey_name === 'survey') {
+        frappe.msgprint(__("Survey ID could not be identified from the URL."));
+        return;
+    }
+
+    // 2️⃣ Setup Survey Container
+    // Use .toggle() or .css to ensure the layout doesn't "jump"
+    $(".form-body").hide();
+    
+    // Check if element already exists to prevent duplicate rendering on route changes
+    if ($("#surveyElement").length === 0) {
+        $('<div id="surveyElement" style="display:inline-block;width:100%;min-height:500px;"></div>')
+            .insertAfter(".form-body");
+    }
+
+    // 3️⃣ Fetch Dynamic Survey JSON
     frappe.call({
         method: "survey_app.survey_app.doctype.survey_questions.survey_questions.get_survey_json",
         args: {
-            survey_name: "My Awesome Survey" // You can pull this from a URL parameter too
+            survey_name: survey_name
         },
+        freeze: true, // Shows a loading overlay automatically
         callback: function(r) {
             if (r.message) {
-                initializeSurvey(r.message);
+                initializeSurvey(r.message, survey_name);
+            } else {
+                frappe.show_alert({
+                    message: __("Survey configuration not found."),
+                    indicator: 'red'
+                });
             }
         }
     });
 
-    function initializeSurvey(surveyJson) {
-        // Apply a modern theme (requires survey-core and survey-js-ui libraries)
+    function initializeSurvey(surveyJson, docName) {
+        // Ensure SurveyJS library is loaded before initializing
+        if (typeof Survey === "undefined") {
+            console.error("SurveyJS library is missing.");
+            return;
+        }
+
         const survey = new Survey.Model(surveyJson);
 
-        // Optional: Customizing the look
         survey.applyTheme({
-            "cssVariables": {
-                "--sjs-primary-backcolor": "#2c3e50", // Your brand color
+            cssVariables: {
+                "--sjs-primary-backcolor": "#2c3e50",
                 "--sjs-primary-backcolor-light": "rgba(44, 62, 80, 0.1)",
             }
         });
 
-        // 3. Handle Completion
         survey.onComplete.add(function (sender, options) {
-            // Display a loading state
-            options.showDataSaving("Submitting your responses...");
+            options.showDataSaving(__("Submitting your responses..."));
 
             frappe.call({
                 method: "survey_app.survey_app.doctype.survey_questions.survey_questions.submit_survey",
                 args: {
-                    survey_id: "My Awesome Survey",
-                    response_data: sender.data // This is the JSON results object
+                    survey_id: docName, 
+                    response_data: sender.data
                 },
                 callback: function(res) {
-                    if (res.message.status === "success") {
-                        options.showDataSavingSuccess("Success! " + res.message.message);
+                    if (res.message && res.message.status === "success") {
+                        options.showDataSavingSuccess(__("Success! ") + res.message.message);
                     } else {
-                        options.showDataSavingError("Something went wrong. Please try again.");
+                        options.showDataSavingError(__("Error: ") + (res.message ? res.message.message : "Submission failed"));
                     }
                 }
             });
         });
 
-        // Render the survey
         $("#surveyElement").Survey({ model: survey });
     }
 });
+
+// web page end 
 
 	},
 });
