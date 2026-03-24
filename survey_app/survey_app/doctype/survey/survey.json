@@ -7,7 +7,10 @@
  "field_order": [
   "title",
   "sub_title",
-  "questions"
+  "questions",
+  "is_internal_scoring",
+  "employee_score",
+  "rated_by"
  ],
  "fields": [
   {
@@ -25,11 +28,31 @@
    "fieldtype": "Table",
    "label": "Questions",
    "options": "Survey Questions"
+  },
+  {
+   "default": "0",
+   "fieldname": "is_internal_scoring",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Is Internal Scoring"
+  },
+  {
+   "fieldname": "employee_score",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "label": "Employee Being Rated",
+   "options": "Employee"
+  },
+  {
+   "fieldname": "rated_by",
+   "fieldtype": "Link",
+   "label": "Rated By",
+   "options": "User"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-10 09:49:40.448311",
+ "modified": "2026-02-23 22:10:07.673221",
  "modified_by": "Administrator",
  "module": "Survey App",
  "name": "Survey",

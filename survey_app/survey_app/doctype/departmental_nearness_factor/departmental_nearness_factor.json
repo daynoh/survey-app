@@ -1,0 +1,47 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-03-11 10:39:17.659029",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "department",
+  "department2",
+  "factor"
+ ],
+ "fields": [
+  {
+   "fieldname": "department",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Department",
+   "options": "Department"
+  },
+  {
+   "fieldname": "department2",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Department ( Linked Department)",
+   "options": "Department"
+  },
+  {
+   "fieldname": "factor",
+   "fieldtype": "Float",
+   "in_list_view": 1,
+   "label": "Factor"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-03-11 10:43:34.322207",
+ "modified_by": "Administrator",
+ "module": "Survey App",
+ "name": "Departmental Nearness Factor",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

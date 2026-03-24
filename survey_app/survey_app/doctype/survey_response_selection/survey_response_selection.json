@@ -1,0 +1,51 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-02-18 00:55:59.259623",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "option",
+  "row_option",
+  "column_option",
+  "score"
+ ],
+ "fields": [
+  {
+   "fieldname": "option",
+   "fieldtype": "Link",
+   "label": "Option",
+   "options": "Survey Question Options"
+  },
+  {
+   "fieldname": "row_option",
+   "fieldtype": "Link",
+   "label": "row_option",
+   "options": "Survey Question Options"
+  },
+  {
+   "fieldname": "column_option",
+   "fieldtype": "Link",
+   "label": "column_option",
+   "options": "Survey Question Options"
+  },
+  {
+   "fieldname": "score",
+   "fieldtype": "Int",
+   "label": "Score"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-02-18 13:17:54.618808",
+ "modified_by": "Administrator",
+ "module": "Survey App",
+ "name": "Survey Response Selection",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}

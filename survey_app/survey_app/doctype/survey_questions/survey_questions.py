@@ -2,6 +2,8 @@ import frappe
 import json
 from frappe.model.document import Document
 from frappe.utils import slug
+from collections import defaultdict
+
 
 class SurveyQuestions(Document):
 
@@ -11,17 +13,15 @@ class SurveyQuestions(Document):
             self.question_name = slug(self.title).replace('-', '_')
     
 
-import frappe
-from collections import defaultdict
 
 @frappe.whitelist(allow_guest=True)
 def get_survey_json(survey_name):
-    doc = frappe.get_doc("Survey", survey_name)
 
+    doc = frappe.get_doc("Survey", survey_name)
     pages_dict = defaultdict(list)
 
     # -------------------------------------------------
-    # 1. Introduction Page (Page 0)
+    # 1. Introduction Page
     # -------------------------------------------------
     if doc.title:
         welcome_html = f"""
@@ -43,7 +43,7 @@ def get_survey_json(survey_name):
     for q in doc.questions:
 
         question_data = {
-            "name": q.question_name,
+            "name": q.name,  # ✅ PRIMARY KEY
             "type": q.type,
             "title": q.title,
             "description": q.description,
@@ -56,7 +56,7 @@ def get_survey_json(survey_name):
         if q.type in ["checkbox", "radiogroup", "dropdown"]:
             question_data["choices"] = [
                 {
-                    "value": opt.option_value,
+                    "value": opt.name,   # ✅ PRIMARY KEY
                     "text": opt.option_label
                 }
                 for opt in q.options
@@ -71,7 +71,7 @@ def get_survey_json(survey_name):
             if q.options:
                 question_data["rateValues"] = [
                     {
-                        "value": opt.option_value,
+                        "value": opt.name,   # ✅ PRIMARY KEY
                         "text": opt.option_label
                     }
                     for opt in q.options
@@ -82,35 +82,29 @@ def get_survey_json(survey_name):
         # -------------------------------------------------
         if q.type == "boolean":
             question_data.update({
-                "valueTrue": getattr(q, "value_true", None) or "Yes",
-                "valueFalse": getattr(q, "value_false", None) or "No",
+                "valueTrue": "TRUE",
+                "valueFalse": "FALSE",
                 "renderAs": getattr(q, "render_as", None) or "default",
             })
-
-            if getattr(q, "render_as", None) == "checkbox":
-                question_data["useTitleAsLabel"] = True
-                question_data["titleLocation"] = "hidden"
 
         # -------------------------------------------------
         # Matrix
         # -------------------------------------------------
         if q.type == "matrix":
-
-            # Load full child doc (only when needed)
             question = frappe.get_doc("Survey Questions", q.name)
 
             rows = []
             columns = []
 
             for opt in question.options:
-                if getattr(opt, "dimension_type", None) == "row":
+                if opt.dimension_type == "row":
                     rows.append({
-                        "value": opt.option_value,
+                        "value": opt.name,   # ✅ PRIMARY KEY
                         "text": opt.option_label
                     })
-                elif getattr(opt, "dimension_type", None) == "column":
+                elif opt.dimension_type == "column":
                     columns.append({
-                        "value": opt.option_value,
+                        "value": opt.name,   # ✅ PRIMARY KEY
                         "text": opt.option_label
                     })
 
@@ -124,15 +118,11 @@ def get_survey_json(survey_name):
                 "columns": columns
             })
 
-
-        # -------------------------------------------------
-        # Assign to Page Number (default = 1)
-        # -------------------------------------------------
         page_number = getattr(q, "page_number", 1) or 1
         pages_dict[page_number].append(question_data)
 
     # -------------------------------------------------
-    # 3. Build Final Pages List (Sorted)
+    # 3. Build Pages
     # -------------------------------------------------
     pages = []
 
@@ -142,9 +132,6 @@ def get_survey_json(survey_name):
             "elements": pages_dict[page_no]
         })
 
-    # -------------------------------------------------
-    # 4. Final Survey JSON
-    # -------------------------------------------------
     return {
         "showProgressBar": "bottom",
         "firstPageIsStarted": True,
@@ -156,30 +143,132 @@ def get_survey_json(survey_name):
 
 @frappe.whitelist(allow_guest=True)
 def submit_survey(survey_id, response_data):
-    # Parse stringified JSON if it arrives as a string from the frontend
+    
+
     if isinstance(response_data, str):
         response_data = json.loads(response_data)
 
     if not frappe.db.exists("Survey", survey_id):
         frappe.throw("Invalid Survey ID")
 
-    new_res = frappe.get_doc({
+    survey_doc = frappe.get_doc("Survey", survey_id)
+    user = frappe.session.user if frappe.session.user != "Guest" else None
+
+    # -----------------------------------------------------
+    # Build lookup sets for validation
+    # -----------------------------------------------------
+
+    valid_questions = {q.name for q in survey_doc.questions}
+
+    valid_options = {
+        opt.name: opt.score or 0
+        for q in survey_doc.questions
+        for opt in frappe.get_doc("Survey Questions", q.name).options
+    }
+
+    # -----------------------------------------------------
+    # Create response document
+    # -----------------------------------------------------
+
+    response_doc = frappe.get_doc({
         "doctype": "Survey Response",
+        "respondent": user,
         "survey": survey_id,
         "submission_date": frappe.utils.now(),
         "answers": []
-    })
+    }).insert(ignore_permissions=True)
+    frappe.db.commit()
 
-    for key, value in response_data.items():
-        # Clean the value: if it's a list (checkboxes), join with commas
-        formatted_value = ", ".join(value) if isinstance(value, list) else value
-        
-        new_res.append("answers", {
-            "question": key,
-            "answer": formatted_value
-        })
-    
-    new_res.insert(ignore_permissions=True)
-    # Commit is often needed for guest submissions to persist immediately
-    frappe.db.commit() 
-    return {"status": "success", "message": "Thank you for your response!"}
+
+    total_score = 0
+
+    # -----------------------------------------------------
+    # Process answers
+    # -----------------------------------------------------
+
+    for question_id, value in response_data.items():
+
+        # Skip invalid questions
+        if question_id not in valid_questions:
+            continue
+
+        question_doc = frappe.get_doc("Survey Questions", question_id)
+
+        answer_row = response_doc.append("answers", {
+            "question": question_id,
+            "question_type": question_doc.type
+        }).save(ignore_permissions=True)
+
+        qtype = question_doc.type
+
+        # ---------------------------
+        # TEXT
+        # ---------------------------
+        if qtype == "text":
+            answer_row.text_answer = value
+
+        # ---------------------------
+        # RATING
+        # ---------------------------
+        elif qtype == "rating":
+            answer_row.number_answer = float(value)
+
+        # ---------------------------
+        # RADIO / DROPDOWN
+        # ---------------------------
+        elif qtype in ["radiogroup", "dropdown"]:
+
+            if value in valid_options:
+                answer_row.selected_option = value
+                # total_score += valid_options[value]
+
+        # ---------------------------
+        # CHECKBOX
+        # ---------------------------
+        elif qtype == "checkbox" and isinstance(value, list):
+
+            for opt_id in value:
+                if opt_id in valid_options:
+                    answer_row.append("selections", {
+                        "option": opt_id,
+                        "score": valid_options[opt_id]
+                    })
+                    # total_score += valid_options[opt_id]
+
+        # ---------------------------
+        # MATRIX
+        # value = { row_id: column_id }
+        # ---------------------------
+        elif qtype == "matrix" and isinstance(value, dict):
+
+            for row_id, column_id in value.items():
+
+                if column_id in valid_options:
+                    score = valid_options[column_id]
+                    answer_selections = frappe.get_doc("Survey Response Answer", answer_row)
+
+
+                    answer_selections.append("selections", {
+                        "row_option": row_id,
+                        "column_option": column_id,
+                        "score": score
+                    })      
+                    answer_selections.save(ignore_permissions=True)
+
+                    # answer_row.append("selections", {
+                    #     "row_option": row_id,
+                    #     "column_option": column_id,
+                    #     "score": score
+                    # })
+                    # answer_row.append("selections",answer_selections)
+
+                    # total_score += score
+
+    # response_doc.total_score = total_score
+    response_doc.save(ignore_permissions=True)
+
+    return {
+        "status": "success",
+        "message": "Thank you for your response!",
+        "total_score": total_score
+    }

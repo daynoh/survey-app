@@ -1,0 +1,63 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-02-18 00:51:24.529251",
+ "doctype": "DocType",
+ "editable_grid": 1,
+ "engine": "InnoDB",
+ "field_order": [
+  "question",
+  "question_type",
+  "text_answer",
+  "number_answer",
+  "selected_option",
+  "selections"
+ ],
+ "fields": [
+  {
+   "fieldname": "question",
+   "fieldtype": "Link",
+   "label": "Question",
+   "options": "Survey Questions"
+  },
+  {
+   "fieldname": "question_type",
+   "fieldtype": "Data",
+   "label": "Question Type"
+  },
+  {
+   "fieldname": "text_answer",
+   "fieldtype": "Long Text",
+   "label": "text_answer"
+  },
+  {
+   "fieldname": "number_answer",
+   "fieldtype": "Float",
+   "label": "number_answer"
+  },
+  {
+   "fieldname": "selected_option",
+   "fieldtype": "Link",
+   "label": "selected_option",
+   "options": "Survey Question Options"
+  },
+  {
+   "fieldname": "selections",
+   "fieldtype": "Table",
+   "label": "selections",
+   "options": "Survey Response Selection"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "istable": 1,
+ "links": [],
+ "modified": "2026-02-18 13:18:59.457854",
+ "modified_by": "Administrator",
+ "module": "Survey App",
+ "name": "Survey Response Answer",
+ "owner": "Administrator",
+ "permissions": [],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
