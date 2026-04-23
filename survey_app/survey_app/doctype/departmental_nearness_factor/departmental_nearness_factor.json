@@ -1,5 +1,6 @@
 {
  "actions": [],
+ "allow_import": 1,
  "allow_rename": 1,
  "creation": "2026-03-11 10:39:17.659029",
  "doctype": "DocType",
@@ -14,14 +15,18 @@
   {
    "fieldname": "department",
    "fieldtype": "Link",
+   "in_filter": 1,
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Department",
    "options": "Department"
   },
   {
    "fieldname": "department2",
    "fieldtype": "Link",
+   "in_filter": 1,
    "in_list_view": 1,
+   "in_standard_filter": 1,
    "label": "Department ( Linked Department)",
    "options": "Department"
   },
@@ -33,14 +38,26 @@
   }
  ],
  "index_web_pages_for_search": 1,
- "istable": 1,
  "links": [],
- "modified": "2026-03-11 10:43:34.322207",
+ "modified": "2026-04-23 21:50:57.324200",
  "modified_by": "Administrator",
  "module": "Survey App",
  "name": "Departmental Nearness Factor",
  "owner": "Administrator",
- "permissions": [],
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
  "sort_field": "modified",
  "sort_order": "DESC",
  "states": []
