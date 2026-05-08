@@ -10,12 +10,14 @@
   "questions",
   "is_internal_scoring",
   "employee_score",
-  "rated_by"
+  "rated_by",
+  "single_response"
  ],
  "fields": [
   {
    "fieldname": "title",
    "fieldtype": "Data",
+   "in_list_view": 1,
    "label": "Title"
   },
   {
@@ -48,11 +50,18 @@
    "fieldtype": "Link",
    "label": "Rated By",
    "options": "User"
+  },
+  {
+   "default": "0",
+   "fieldname": "single_response",
+   "fieldtype": "Check",
+   "hidden": 1,
+   "label": "Is Single Response"
   }
  ],
  "index_web_pages_for_search": 1,
  "links": [],
- "modified": "2026-02-23 22:10:07.673221",
+ "modified": "2026-05-08 11:27:46.221226",
  "modified_by": "Administrator",
  "module": "Survey App",
  "name": "Survey",
