@@ -190,12 +190,12 @@ def generate_capped_surveys():
                 # # Assign
                 # ALLOWED_REVIEWERS = {"HR-EMP-00045"}
 
-                # # create_survey_log(reviewer=reviewer, reviewee=reviewee)
+                create_survey_log(reviewer=reviewer, reviewee=reviewee)
                 # if reviewer in ALLOWED_REVIEWERS:
                 #     print(f"Assigning {reviewer} to review {reviewee}")
                     
-                survey_name = create_survey_and_send_invitation(sender_employee=reviewer, receiver_employee=reviewee)
-                send_survey_notification_and_task(survey_name, sender_employee=reviewer, receiver_employee=reviewee)
+                # survey_name = create_survey_and_send_invitation(sender_employee=reviewer, receiver_employee=reviewee)
+                # send_survey_notification_and_task(survey_name, sender_employee=reviewer, receiver_employee=reviewee)
 
                 created_pairs.add(pair)
 
