@@ -1,0 +1,91 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2026-02-23 18:50:25.621069",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "questions_per_category",
+  "excluded_departments",
+  "max_surveys_per_employee",
+  "max_surveys_per_reviewer",
+  "column_break_tepb",
+  "exclude_rated",
+  "exclude_rating",
+  "departmental_nearness_factor_section",
+  "department_factors"
+ ],
+ "fields": [
+  {
+   "fieldname": "excluded_departments",
+   "fieldtype": "Table MultiSelect",
+   "label": "Excluded Departments",
+   "options": "Department Multiselect"
+  },
+  {
+   "fieldname": "max_surveys_per_employee",
+   "fieldtype": "Int",
+   "label": "Maximum Surveys per Employee"
+  },
+  {
+   "fieldname": "questions_per_category",
+   "fieldtype": "Int",
+   "label": "Value Questions Per Category"
+  },
+  {
+   "fieldname": "max_surveys_per_reviewer",
+   "fieldtype": "Int",
+   "label": "Maximum Surveys per Reviewer"
+  },
+  {
+   "fieldname": "departmental_nearness_factor_section",
+   "fieldtype": "Section Break",
+   "label": "Departmental Nearness Factor"
+  },
+  {
+   "fieldname": "department_factors",
+   "fieldtype": "Table",
+   "label": "Department Factors",
+   "options": "Departmental Nearness Factor"
+  },
+  {
+   "fieldname": "column_break_tepb",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "exclude_rated",
+   "fieldtype": "Table MultiSelect",
+   "label": "Excluded Rated Staff ( Members not being rated)",
+   "options": "Assignment Rule User"
+  },
+  {
+   "fieldname": "exclude_rating",
+   "fieldtype": "Table MultiSelect",
+   "label": "Excluded Rating Staff (Excluded from rating others)",
+   "options": "Assignment Rule User"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-03-11 10:55:11.516352",
+ "modified_by": "Administrator",
+ "module": "Survey App",
+ "name": "Value Scoring Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
