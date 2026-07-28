@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>360 Survey</title>
+    <script src="https://unpkg.com/jquery@3.7.1/dist/jquery.min.js"></script>
+    <script src="https://unpkg.com/survey-jquery@1.9.110/survey.jquery.min.js"></script>
+    <link rel="stylesheet" href="/assets/survey_app/css/survey.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <style>
+        body { margin: 0; padding: 20px; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f5f7fa; }
+        #surveyElement { max-width: 900px; margin: 0 auto; }
+        .loading { text-align: center; padding: 50px; color: #666; }
+        .error { color: #c00; text-align: center; padding: 50px; }
+    </style>
+</head>
+<body>
+    <div id="surveyElement"><div class="loading">Loading survey...</div></div>
+
+    <script>
+        $(function() {
+            // Debug: verify libraries loaded
+            if (typeof Survey === 'undefined') {
+                $('#surveyElement').html('<div class="error"><h2>Survey library not loaded</h2><p>SurveyJS failed to initialise.</p></div>');
+                return;
+            }
+            if (typeof $ === 'undefined' || typeof $.fn === 'undefined') {
+                $('#surveyElement').html('<div class="error"><h2>jQuery not loaded</h2></div>');
+                return;
+            }
+
+            var urlParams = new URLSearchParams(window.location.search);
+            var surveyId = urlParams.get('id');
+
+            if (!surveyId) {
+                var pathParts = window.location.pathname.split('/');
+                surveyId = pathParts[pathParts.length - 1];
+            }
+
+            if (!surveyId || surveyId === 'survey') {
+                $('#surveyElement').html('<div class="loading"><h2>No survey specified</h2></div>');
+                return;
+            }
+
+            $('#surveyElement').html('<div class="loading">Loading survey data...</div>');
+
+            fetch('/api/method/survey_app.survey_app.doctype.survey_questions.survey_questions.get_survey_json?survey_name=' + encodeURIComponent(surveyId))
+                .then(function(r) { return r.json(); })
+                .then(function(data) {
+                    if (!data.message || !data.message.pages) {
+                        $('#surveyElement').html('<div class="error"><h2>Survey not found</h2><p>The survey may have been deleted or is not available.</p></div>');
+                        return;
+                    }
+
+                    var survey = new Survey.Model(data.message);
+                    survey.onComplete.add(function(result) {
+                        $('#surveyElement').html('<div class="loading">Submitting your responses...</div>');
+
+                        var responseData = JSON.stringify(result.data);
+
+                        fetch('/api/method/survey_app.survey_app.doctype.survey_questions.survey_questions.submit_survey', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ survey_id: surveyId, response_data: responseData })
+                        })
+                            .then(function(r) { return r.json(); })
+                            .then(function(res) {
+                                if (res.message && res.message.status === 'success') {
+                                    $('#surveyElement').html('<div class="loading" style="color:green"><h2>Thank you!</h2><p>Your response has been submitted successfully.</p></div>');
+                                } else if (res.message && res.message.status === 'completed_with_errors') {
+                                    $('#surveyElement').html('<div class="loading" style="color:orange"><h2>Submitted with warnings</h2><p>' + (res.message.message || 'Some answers could not be saved.') + '</p></div>');
+                                } else if (res.exc_type) {
+                                    $('#surveyElement').html('<div class="error"><h2>Submission failed</h2><p>' + (res.exc_type || 'Server error') + ': ' + (res._server_messages || '') + '</p></div>');
+                                } else {
+                                    $('#surveyElement').html('<div class="error"><h2>Submission failed</h2><p>' + ((res.message && res.message.message) || JSON.stringify(res).substring(0, 300) || 'Please try again.') + '</p></div>');
+                                }
+                            })
+                            .catch(function(err) {
+                                $('#surveyElement').html('<div class="error"><h2>Network error</h2><p>Please check your connection and try again.</p></div>');
+                            });
+                    });
+
+                    $('#surveyElement').empty();
+                    $('#surveyElement').Survey({ model: survey });
+                })
+                .catch(function(err) {
+                    $('#surveyElement').html('<div class="error"><h2>Failed to load survey</h2><p>Could not fetch survey data. Please check the link and try again.</p></div>');
+                });
+        });
+    </script>
+</body>
+</html>

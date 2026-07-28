@@ -2,12 +2,173 @@ import frappe
 import random,math
 from itertools import count
 from collections import defaultdict
-from frappe.utils import add_days, today, formatdate
+from frappe.utils import (
+	add_days,
+	today,
+	formatdate,
+	add_months,
+	getdate,
+	now_datetime,
+	get_datetime,
+	add_to_date,
+)
 import math
 import random
 
-def generate_capped_surveys():
+# How long after last_generation before the next automatic run is due.
+FREQUENCY_INTERVALS = {
+	"Every 10 Minutes": {"minutes": 10},
+	"Hourly": {"hours": 1},
+	"Daily": {"days": 1},
+	"Weekly": {"days": 7},
+	"Monthly": {"months": 1},
+	"Quarterly": {"months": 3},
+	"Bi-Annually": {"months": 6},
+	"Yearly": {"months": 12},
+}
+
+
+def _next_generation_due(last_gen, freq):
+	"""Return datetime when the next run is due for the given frequency."""
+	interval = FREQUENCY_INTERVALS.get(freq)
+	if not interval or not last_gen:
+		return None
+	return add_to_date(get_datetime(last_gen), **interval)
+
+
+@frappe.whitelist()
+def auto_generate_if_due(force=0):
+	"""Generate surveys when the configured interval has elapsed.
+
+	force=1 bypasses the due check (used by Run Now on Survey Setup).
+	"""
+	settings = frappe.get_doc("Value Scoring Settings")
+	if not cint_force(force) and not settings.enable_scheduled_generation:
+		return {"status": "disabled"}
+
+	freq = settings.generation_frequency
+	if not freq:
+		return {"status": "no_frequency"}
+
+	if freq not in FREQUENCY_INTERVALS:
+		return {"status": "unknown_frequency", "frequency": freq}
+
+	now = now_datetime()
+	last_gen = settings.last_generation_date
+	should_run = bool(cint_force(force)) or not last_gen
+
+	next_due = None
+	if last_gen and not should_run:
+		next_due = _next_generation_due(last_gen, freq)
+		should_run = now >= get_datetime(next_due)
+
+	if not should_run:
+		return {
+			"status": "not_due",
+			"frequency": freq,
+			"last_generation": str(last_gen) if last_gen else None,
+			"next_run": str(next_due) if next_due else None,
+		}
+
+	try:
+		source = "Force" if cint_force(force) else "Scheduled"
+		result = generate_capped_surveys(trigger_source=source, frequency=freq)
+		settings.reload()
+		settings.last_generation_date = now
+		settings.save(ignore_permissions=True)
+		frappe.db.commit()
+		return {
+			"status": "generated",
+			"frequency": freq,
+			"date": str(now),
+			"created": (result or {}).get("created", 0),
+			"log": (result or {}).get("log"),
+			"next_run": str(_next_generation_due(now, freq)),
+		}
+	except Exception as e:
+		frappe.log_error(title="Auto Survey Generation Failed", message=frappe.get_traceback())
+		try:
+			_create_generation_log(
+				trigger_source="Force" if cint_force(force) else "Scheduled",
+				frequency=freq,
+				status="Failed",
+				details=[],
+				error_message=str(e),
+			)
+		except Exception:
+			pass
+		return {"status": "error", "message": str(e)}
+
+
+def cint_force(force):
+	from frappe.utils import cint
+	return cint(force)
+
+
+@frappe.whitelist()
+def get_auto_generation_status():
+	"""Read-only status for Survey Setup (does not generate)."""
+	settings = frappe.get_doc("Value Scoring Settings")
+	freq = settings.generation_frequency or ""
+	last_gen = settings.last_generation_date
+	enabled = cint_force(settings.enable_scheduled_generation)
+	now = now_datetime()
+
+	if not enabled:
+		return {
+			"status": "disabled",
+			"enabled": 0,
+			"frequency": freq,
+			"last_generation": str(last_gen) if last_gen else None,
+		}
+
+	if not freq:
+		return {
+			"status": "no_frequency",
+			"enabled": 1,
+			"frequency": "",
+			"last_generation": str(last_gen) if last_gen else None,
+		}
+
+	if freq not in FREQUENCY_INTERVALS:
+		return {
+			"status": "unknown_frequency",
+			"enabled": 1,
+			"frequency": freq,
+			"last_generation": str(last_gen) if last_gen else None,
+		}
+
+	if not last_gen:
+		return {
+			"status": "due",
+			"enabled": 1,
+			"frequency": freq,
+			"last_generation": None,
+			"next_run": str(now),
+			"now": str(now),
+			"seconds_remaining": 0,
+			"message": "Never generated — due on next scheduler tick",
+		}
+
+	next_due = _next_generation_due(last_gen, freq)
+	next_due_dt = get_datetime(next_due)
+	is_due = now >= next_due_dt
+	seconds_remaining = 0 if is_due else max(0, int((next_due_dt - now).total_seconds()))
+	return {
+		"status": "due" if is_due else "not_due",
+		"enabled": 1,
+		"frequency": freq,
+		"last_generation": str(last_gen),
+		"next_run": str(next_due),
+		"now": str(now),
+		"seconds_remaining": seconds_remaining,
+	}
+
+
+@frappe.whitelist()
+def generate_capped_surveys(trigger_source="Manual", frequency=None):
     settings = frappe.get_doc("Value Scoring Settings")
+    frequency = frequency or settings.generation_frequency or ""
 
     # --- Load configs ---
     max_reviewer_cap = settings.max_surveys_per_reviewer or 10
@@ -44,6 +205,7 @@ def generate_capped_surveys():
     employee_review_count = defaultdict(int)
 
     created_pairs = set()
+    detail_rows = []
 
     # --- Helpers ---
     def get_all_managers(emp):
@@ -194,8 +356,19 @@ def generate_capped_surveys():
                 # if reviewer in ALLOWED_REVIEWERS:
                 #     print(f"Assigning {reviewer} to review {reviewee}")
                     
-                # survey_name = create_survey_and_send_invitation(sender_employee=reviewer, receiver_employee=reviewee)
-                # send_survey_notification_and_task(survey_name, sender_employee=reviewer, receiver_employee=reviewee)
+                survey_name = create_survey_and_send_invitation(sender_employee=reviewer, receiver_employee=reviewee)
+                notify = send_survey_notification_and_task(survey_name, sender_employee=reviewer, receiver_employee=reviewee) or {}
+
+                detail_rows.append({
+                    "survey": survey_name,
+                    "reviewer": reviewer,
+                    "reviewer_name": notify.get("reviewer_name") or frappe.db.get_value("Employee", reviewer, "employee_name"),
+                    "reviewer_email": notify.get("reviewer_email"),
+                    "reviewee": reviewee,
+                    "reviewee_name": notify.get("reviewee_name") or frappe.db.get_value("Employee", reviewee, "employee_name"),
+                    "task": notify.get("task"),
+                    "email_sent": 1 if notify.get("email_sent") else 0,
+                })
 
                 created_pairs.add(pair)
 
@@ -205,6 +378,43 @@ def generate_capped_surveys():
                 progress = True
                 break  # Move to next reviewee
 
+    log_name = _create_generation_log(
+        trigger_source=trigger_source,
+        frequency=frequency,
+        status="Success" if detail_rows else "Skipped",
+        details=detail_rows,
+        summary=(
+            f"Created {len(detail_rows)} survey(s) via {trigger_source}"
+            + (f" ({frequency})" if frequency else "")
+        ),
+    )
+
+    return {
+        "status": "success",
+        "created": len(created_pairs),
+        "log": log_name,
+        "emails_sent": sum(1 for d in detail_rows if d.get("email_sent")),
+    }
+
+
+def _create_generation_log(trigger_source, frequency, status, details, summary="", error_message=""):
+    """Persist a Survey Generation Log with recipient details."""
+    emails_sent = sum(1 for d in details if d.get("email_sent"))
+    doc = frappe.get_doc({
+        "doctype": "Survey Generation Log",
+        "triggered_at": now_datetime(),
+        "trigger_source": trigger_source or "API",
+        "frequency": frequency or "",
+        "status": status,
+        "surveys_created": len(details),
+        "emails_sent": emails_sent,
+        "summary": summary or "",
+        "error_message": error_message or "",
+        "details": details or [],
+    })
+    doc.insert(ignore_permissions=True)
+    frappe.db.commit()
+    return doc.name
 
 
 def create_survey_log(reviewer, reviewee):
@@ -374,11 +584,17 @@ def send_survey_notification_and_task(survey_name, sender_employee, receiver_emp
     """
 
     # Send Email
-    frappe.sendmail(
-        recipients=[reviewer_email],
-        subject=email_subject,
-        message=email_message
-    )
+    email_sent = 0
+    if reviewer_email:
+        try:
+            frappe.sendmail(
+                recipients=[reviewer_email],
+                subject=email_subject,
+                message=email_message
+            )
+            email_sent = 1
+        except Exception:
+            frappe.log_error(title="Survey Email Failed", message=frappe.get_traceback())
 
     # ---------------------------------------------
     # Create Task Assigned to Reviewer
@@ -428,7 +644,11 @@ Please ensure this is completed within the required timeline.
     return {
         "status": "success",
         "survey_url": survey_url,
-        "task": task_doc.name
+        "task": task_doc.name,
+        "reviewer_name": reviewer_name,
+        "reviewer_email": reviewer_email,
+        "reviewee_name": receiver_name,
+        "email_sent": email_sent,
     }
 
 

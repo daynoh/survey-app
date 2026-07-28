@@ -4,17 +4,19 @@
  "creation": "2026-02-23 18:50:25.621069",
  "doctype": "DocType",
  "engine": "InnoDB",
- "field_order": [
-  "questions_per_category",
-  "excluded_departments",
-  "max_surveys_per_employee",
-  "max_surveys_per_reviewer",
-  "column_break_tepb",
-  "exclude_rated",
-  "exclude_rating",
-  "departmental_nearness_factor_section",
-  "department_factors"
- ],
+"field_order": [
+    "questions_per_category",
+    "excluded_departments",
+    "max_surveys_per_employee",
+    "max_surveys_per_reviewer",
+    "column_break_tepb",
+    "exclude_rated",
+    "exclude_rating",
+    "section_break_schedule",
+    "enable_scheduled_generation",
+    "generation_frequency",
+    "last_generation_date"
+   ],
  "fields": [
   {
    "fieldname": "excluded_departments",
@@ -37,21 +39,10 @@
    "fieldtype": "Int",
    "label": "Maximum Surveys per Reviewer"
   },
-  {
-   "fieldname": "departmental_nearness_factor_section",
-   "fieldtype": "Section Break",
-   "label": "Departmental Nearness Factor"
-  },
-  {
-   "fieldname": "department_factors",
-   "fieldtype": "Table",
-   "label": "Department Factors",
-   "options": "Departmental Nearness Factor"
-  },
-  {
-   "fieldname": "column_break_tepb",
-   "fieldtype": "Column Break"
-  },
+{
+    "fieldname": "column_break_tepb",
+    "fieldtype": "Column Break"
+   },
   {
    "fieldname": "exclude_rated",
    "fieldtype": "Table MultiSelect",
@@ -62,13 +53,39 @@
    "fieldname": "exclude_rating",
    "fieldtype": "Table MultiSelect",
    "label": "Excluded Rating Staff (Excluded from rating others)",
-   "options": "Assignment Rule User"
-  }
- ],
+"options": "Assignment Rule User"
+   },
+   {
+    "fieldname": "section_break_schedule",
+    "fieldtype": "Section Break",
+    "label": "Automated Survey Generation"
+   },
+   {
+    "default": "0",
+    "fieldname": "enable_scheduled_generation",
+    "fieldtype": "Check",
+    "label": "Enable Automatic Survey Generation"
+   },
+   {
+    "depends_on": "eval:doc.enable_scheduled_generation",
+    "description": "Short intervals (Every 10 Minutes / Hourly) are for testing. Use Daily or longer in production.",
+    "fieldname": "generation_frequency",
+    "fieldtype": "Select",
+    "label": "Generation Frequency",
+    "options": "Every 10 Minutes\nHourly\nDaily\nWeekly\nMonthly\nQuarterly\nBi-Annually\nYearly"
+   },
+   {
+    "depends_on": "eval:doc.enable_scheduled_generation",
+    "fieldname": "last_generation_date",
+    "fieldtype": "Datetime",
+    "label": "Last Generation",
+    "read_only": 1
+   }
+  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-03-11 10:55:11.516352",
+ "modified": "2026-07-27 15:30:00.000000",
  "modified_by": "Administrator",
  "module": "Survey App",
  "name": "Value Scoring Settings",

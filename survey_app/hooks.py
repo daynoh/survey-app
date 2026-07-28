@@ -151,23 +151,15 @@ website_route_rules = [
 # Scheduled Tasks
 # ---------------
 
-# scheduler_events = {
-#	"all": [
-#		"survey_app.tasks.all"
-#	],
-#	"daily": [
-#		"survey_app.tasks.daily"
-#	],
-#	"hourly": [
-#		"survey_app.tasks.hourly"
-#	],
-#	"weekly": [
-#		"survey_app.tasks.weekly"
-#	],
-#	"monthly": [
-#		"survey_app.tasks.monthly"
-#	],
-# }
+# Runs every 5 minutes so short test frequencies (e.g. Every 10 Minutes) can fire.
+# auto_generate_if_due itself decides whether a run is due based on settings.
+scheduler_events = {
+    "cron": {
+        "*/5 * * * *": [
+            "survey_app.surveys.auto_generate_if_due"
+        ]
+    },
+}
 
 # Testing
 # -------

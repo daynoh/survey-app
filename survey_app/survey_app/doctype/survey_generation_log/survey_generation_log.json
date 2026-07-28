@@ -1,0 +1,146 @@
+{
+ "actions": [],
+ "allow_rename": 0,
+ "autoname": "naming_series:",
+ "creation": "2026-07-27 15:22:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "triggered_at",
+  "trigger_source",
+  "frequency",
+  "column_break_status",
+  "status",
+  "surveys_created",
+  "emails_sent",
+  "section_break_summary",
+  "summary",
+  "error_message",
+  "section_break_details",
+  "details"
+ ],
+ "fields": [
+  {
+   "default": "SGL-.YYYY.-.#####",
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "hidden": 1,
+   "label": "Naming Series",
+   "options": "SGL-.YYYY.-.#####"
+  },
+  {
+   "fieldname": "triggered_at",
+   "fieldtype": "Datetime",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Triggered At",
+   "reqd": 1
+  },
+  {
+   "fieldname": "trigger_source",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Trigger Source",
+   "options": "Scheduled\nManual\nForce\nAPI",
+   "reqd": 1
+  },
+  {
+   "fieldname": "frequency",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Frequency"
+  },
+  {
+   "fieldname": "column_break_status",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Success",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Success\nPartial\nFailed\nSkipped"
+  },
+  {
+   "default": "0",
+   "fieldname": "surveys_created",
+   "fieldtype": "Int",
+   "in_list_view": 1,
+   "label": "Surveys Created"
+  },
+  {
+   "default": "0",
+   "fieldname": "emails_sent",
+   "fieldtype": "Int",
+   "label": "Emails Sent"
+  },
+  {
+   "fieldname": "section_break_summary",
+   "fieldtype": "Section Break",
+   "label": "Summary"
+  },
+  {
+   "fieldname": "summary",
+   "fieldtype": "Small Text",
+   "label": "Summary"
+  },
+  {
+   "fieldname": "error_message",
+   "fieldtype": "Long Text",
+   "label": "Error Message"
+  },
+  {
+   "fieldname": "section_break_details",
+   "fieldtype": "Section Break",
+   "label": "Recipients & Surveys"
+  },
+  {
+   "fieldname": "details",
+   "fieldtype": "Table",
+   "label": "Details",
+   "options": "Survey Generation Detail"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-07-27 15:22:00.000000",
+ "modified_by": "Administrator",
+ "module": "Survey App",
+ "name": "Survey Generation Log",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "HR Manager",
+   "share": 0,
+   "write": 0
+  }
+ ],
+ "sort_field": "triggered_at",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "triggered_at",
+ "track_changes": 1
+}

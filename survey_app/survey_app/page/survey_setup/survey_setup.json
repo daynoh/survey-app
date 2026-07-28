@@ -1,0 +1,13 @@
+{
+ "doctype": "Page",
+ "name": "survey-setup",
+ "title": "Survey Configuration",
+ "module": "Survey App",
+ "icon": "fa fa-cog",
+ "standard": "Yes",
+ "roles": [
+  {"role": "System Manager"},
+  {"role": "HR Manager"}
+ ],
+ "page_name": "survey-setup"
+}
