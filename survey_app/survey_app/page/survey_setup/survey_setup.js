@@ -41,6 +41,11 @@ survey_app.SurveySetup = class SurveySetup {
 						</button>
 					</li>
 					<li class="nav-item">
+						<button type="button" class="nav-link" data-tab="roles" role="tab">
+							<i class="fa fa-users"></i> ${__('Roles & Org')}
+						</button>
+					</li>
+					<li class="nav-item">
 						<button type="button" class="nav-link" data-tab="automation" role="tab">
 							<i class="fa fa-clock-o"></i> ${__('Automation')}
 						</button>
@@ -59,6 +64,7 @@ survey_app.SurveySetup = class SurveySetup {
 				<div class="tab-content">
 					<div role="tabpanel" class="tab-pane fade show active" id="tab-categories"></div>
 					<div role="tabpanel" class="tab-pane fade" id="tab-scoring"></div>
+					<div role="tabpanel" class="tab-pane fade" id="tab-roles"></div>
 					<div role="tabpanel" class="tab-pane fade" id="tab-automation"></div>
 					<div role="tabpanel" class="tab-pane fade" id="tab-generate"></div>
 					<div role="tabpanel" class="tab-pane fade" id="tab-trail"></div>
@@ -230,9 +236,11 @@ survey_app.SurveySetup = class SurveySetup {
 
 		this.tab_categories = this.$root.find('#tab-categories');
 		this.tab_scoring = this.$root.find('#tab-scoring');
+		this.tab_roles = this.$root.find('#tab-roles');
 		this.tab_automation = this.$root.find('#tab-automation');
 		this.tab_generate = this.$root.find('#tab-generate');
 		this.tab_trail = this.$root.find('#tab-trail');
+		this._team_leader_rows = [];
 
 		this.$root.find('.nav-link').on('click', (e) => {
 			e.preventDefault();
@@ -265,6 +273,7 @@ survey_app.SurveySetup = class SurveySetup {
 				this.data = r.message || {};
 				this.render_categories_tab();
 				this.render_scoring_tab();
+				this.render_roles_tab();
 				this.render_automation_tab();
 				this.render_generate_tab();
 				this.render_trail_tab();
@@ -502,7 +511,15 @@ survey_app.SurveySetup = class SurveySetup {
 									value="${settings.max_surveys_per_employee || 10}" min="1" max="50">
 							</div>
 							<div class="form-group">
-								<label>${__('Max Surveys per Reviewer')}</label>
+								<label>${__('Min Surveys per Reviewer (per batch)')}</label>
+								<input type="number" class="form-control" id="setting-min-per-batch"
+									value="${settings.min_surveys_per_batch || 3}" min="1" max="50">
+								<p class="help-block text-muted" style="margin-top:6px;font-size:12px;">
+									${__('Required reviews are split evenly across survey sends in the reporting period (completeness cycle). Min floors each send; max caps each send.')}
+								</p>
+							</div>
+							<div class="form-group">
+								<label>${__('Max Surveys per Reviewer (per batch)')}</label>
 								<input type="number" class="form-control" id="setting-max-per-reviewer"
 									value="${settings.max_surveys_per_reviewer || 10}" min="1" max="50">
 							</div>
@@ -530,15 +547,14 @@ survey_app.SurveySetup = class SurveySetup {
 
 		this.tab_scoring.find('#save-settings-btn').on('click', function() {
 			var existing = me.data.settings || {};
-			var data = {
+			var data = Object.assign({}, existing, {
 				questions_per_category: parseInt(me.tab_scoring.find('#setting-questions-per-cat').val(), 10) || 3,
 				max_surveys_per_employee: parseInt(me.tab_scoring.find('#setting-max-per-employee').val(), 10) || 10,
+				min_surveys_per_batch: parseInt(me.tab_scoring.find('#setting-min-per-batch').val(), 10) || 3,
 				max_surveys_per_reviewer: parseInt(me.tab_scoring.find('#setting-max-per-reviewer').val(), 10) || 10,
-				enable_scheduled_generation: existing.enable_scheduled_generation || 0,
-				generation_frequency: existing.generation_frequency || '',
 				exclude_rated: existing.exclude_rated || [],
 				exclude_rating: existing.exclude_rating || []
-			};
+			});
 
 			frappe.call({
 				method: 'survey_app.survey_config.save_scoring_settings',
@@ -642,7 +658,238 @@ survey_app.SurveySetup = class SurveySetup {
 	}
 
 	// ============================================================
-	// TAB 3: Automation
+	// TAB 3: Roles & Org
+	// ============================================================
+	render_roles_tab() {
+		var me = this;
+		var settings = this.data.settings || {};
+		var departments = this.data.departments || [];
+		this._team_leader_rows = (settings.team_leaders || []).map(function (r) {
+			return { department: r.department, employee: r.employee, employee_name: r.employee_name || '' };
+		});
+		if (!this._team_leader_rows.length) {
+			this._team_leader_rows.push({ department: '', employee: '', employee_name: '' });
+		}
+
+		var dept_opts = departments.map(function (d) {
+			return '<option value="' + frappe.utils.escape_html(d.name) + '">' +
+				frappe.utils.escape_html(d.name) + '</option>';
+		}).join('');
+
+		this.tab_roles.html(`
+			<div class="row">
+				<div class="col-md-10 offset-md-1 col-md-offset-1">
+					<div class="panel panel-default">
+						<div class="panel-heading"><b><i class="fa fa-users"></i> ${__('Roles & Organisation')}</b></div>
+						<div class="panel-body">
+							<p class="text-muted">
+								${__('Assign the Managing Director and Team Leaders. Hybrid mode uses your manual picks first, then Employee org data, then Frappe roles.')}
+							</p>
+							<div class="form-group">
+								<label>${__('Role Resolution Mode')}</label>
+								<select class="form-control" id="role-mode">
+									<option value="Hybrid">${__('Hybrid (Manual → Org → Role)')}</option>
+									<option value="Manual">${__('Manual only')}</option>
+									<option value="Org">${__('Employee org data')}</option>
+									<option value="Role">${__('Frappe roles')}</option>
+								</select>
+							</div>
+							<div class="form-group">
+								<label>${__('Managing Director')}</label>
+								<div id="md-employee-link"></div>
+							</div>
+							<div class="form-group">
+								<label>${__('Team Leader Designations')} <span class="text-muted">(${__('optional, comma-separated')})</span></label>
+								<input type="text" class="form-control" id="tl-designations"
+									placeholder="${__('Team Lead, Team Leader')}"
+									value="${frappe.utils.escape_html(settings.team_leader_designations || '')}">
+							</div>
+							<label>${__('Team Leaders by Department')}</label>
+							<div id="tl-rows"></div>
+							<button class="btn btn-xs btn-default" id="add-tl-row" style="margin-top:8px;">
+								<i class="fa fa-plus"></i> ${__('Add Team Leader')}
+							</button>
+							<div style="margin-top:16px;">
+								<button class="btn btn-primary" id="save-roles-btn">
+									<i class="fa fa-save"></i> ${__('Save Roles')}
+								</button>
+								<button class="btn btn-default" id="preview-roles-btn">
+									<i class="fa fa-eye"></i> ${__('Preview Resolved Roster')}
+								</button>
+								<button class="btn btn-default" id="preview-load-btn">
+									<i class="fa fa-calculator"></i> ${__('Preview Cycle Load')}
+								</button>
+							</div>
+							<div id="roles-preview" style="margin-top:16px;"></div>
+						</div>
+					</div>
+				</div>
+			</div>
+		`);
+
+		this.tab_roles.find('#role-mode').val(settings.role_resolution_mode || 'Hybrid');
+		this._md_control = frappe.ui.form.make_control({
+			parent: this.tab_roles.find('#md-employee-link'),
+			df: {
+				fieldtype: 'Link',
+				options: 'Employee',
+				fieldname: 'md_employee',
+				label: __('Managing Director'),
+				default: settings.md_employee || ''
+			},
+			render_input: true
+		});
+		this._md_control.set_value(settings.md_employee || '');
+
+		this._render_tl_rows(dept_opts);
+
+		this.tab_roles.find('#add-tl-row').on('click', function () {
+			me._team_leader_rows.push({ department: '', employee: '', employee_name: '' });
+			me._render_tl_rows(dept_opts);
+		});
+
+		this.tab_roles.find('#save-roles-btn').on('click', function () {
+			me._collect_tl_rows();
+			var existing = me.data.settings || {};
+			var data = Object.assign({}, existing, {
+				role_resolution_mode: me.tab_roles.find('#role-mode').val() || 'Hybrid',
+				md_employee: me._md_control.get_value() || '',
+				team_leader_designations: me.tab_roles.find('#tl-designations').val() || '',
+				team_leaders: me._team_leader_rows.filter(function (r) { return r.department && r.employee; })
+			});
+			frappe.call({
+				method: 'survey_app.survey_config.save_scoring_settings',
+				args: { settings_data: data },
+				freeze: true,
+				callback: function (r) {
+					if (r.exc) return;
+					frappe.show_alert({ message: __('Roles saved'), indicator: 'green' });
+					me.active_tab = 'roles';
+					me.load_data();
+				}
+			});
+		});
+
+		this.tab_roles.find('#preview-roles-btn').on('click', function () {
+			frappe.call({
+				method: 'survey_app.survey_cycle.resolve_org_roles',
+				freeze: true,
+				callback: function (r) {
+					if (r.exc || !r.message) return;
+					me._show_roles_preview(r.message);
+				}
+			});
+		});
+
+		this.tab_roles.find('#preview-load-btn').on('click', function () {
+			frappe.call({
+				method: 'survey_app.survey_cycle.preview_cycle_load',
+				freeze: true,
+				callback: function (r) {
+					if (r.exc || !r.message) return;
+					me._show_load_preview(r.message);
+				}
+			});
+		});
+	}
+
+	_render_tl_rows(dept_opts) {
+		var me = this;
+		var $box = this.tab_roles.find('#tl-rows').empty();
+		this._team_leader_rows.forEach(function (row, idx) {
+			var $row = $(`
+				<div class="row tl-row" data-idx="${idx}" style="margin-bottom:8px;align-items:center;">
+					<div class="col-sm-5">
+						<select class="form-control tl-dept">${dept_opts}</select>
+					</div>
+					<div class="col-sm-5 tl-emp"></div>
+					<div class="col-sm-2">
+						<button class="btn btn-xs btn-default tl-remove" type="button"><i class="fa fa-trash"></i></button>
+					</div>
+				</div>
+			`);
+			$row.find('.tl-dept').val(row.department || '');
+			var ctrl = frappe.ui.form.make_control({
+				parent: $row.find('.tl-emp'),
+				df: {
+					fieldtype: 'Link',
+					options: 'Employee',
+					fieldname: 'tl_employee_' + idx,
+					default: row.employee || ''
+				},
+				render_input: true
+			});
+			ctrl.set_value(row.employee || '');
+			row._ctrl = ctrl;
+			$row.find('.tl-remove').on('click', function () {
+				me._collect_tl_rows();
+				me._team_leader_rows.splice(idx, 1);
+				if (!me._team_leader_rows.length) {
+					me._team_leader_rows.push({ department: '', employee: '', employee_name: '' });
+				}
+				me._render_tl_rows(dept_opts);
+			});
+			$box.append($row);
+		});
+	}
+
+	_collect_tl_rows() {
+		var me = this;
+		this.tab_roles.find('.tl-row').each(function () {
+			var idx = cint($(this).data('idx'));
+			if (!me._team_leader_rows[idx]) return;
+			me._team_leader_rows[idx].department = $(this).find('.tl-dept').val() || '';
+			me._team_leader_rows[idx].employee = (me._team_leader_rows[idx]._ctrl && me._team_leader_rows[idx]._ctrl.get_value()) || '';
+		});
+	}
+
+	_show_roles_preview(data) {
+		var md = data.md;
+		var html = '<div class="panel panel-default"><div class="panel-heading"><b>' + __('Resolved Roster') + '</b></div><div class="panel-body">';
+		html += '<p><b>' + __('MD') + ':</b> ' +
+			(md ? frappe.utils.escape_html(md.employee_name + ' (' + md.source + ')') : '<span class="text-danger">' + __('Not set') + '</span>') +
+			'</p>';
+		if ((data.warnings || []).length) {
+			html += '<div class="alert alert-warning">' + data.warnings.map(frappe.utils.escape_html).join('<br>') + '</div>';
+		}
+		html += '<table class="table table-bordered table-condensed"><thead><tr><th>' + __('Department') +
+			'</th><th>' + __('Team Leader') + '</th><th>' + __('Source') + '</th><th>' + __('Team Size') + '</th></tr></thead><tbody>';
+		(data.roster || []).forEach(function (r) {
+			html += '<tr><td>' + frappe.utils.escape_html(r.department || '') + '</td><td>' +
+				frappe.utils.escape_html(r.team_leader_name || '—') + '</td><td>' +
+				frappe.utils.escape_html(r.source || '—') + '</td><td>' + (r.team_size || 0) + '</td></tr>';
+		});
+		html += '</tbody></table></div></div>';
+		this.tab_roles.find('#roles-preview').html(html);
+	}
+
+	_show_load_preview(data) {
+		var html = '<div class="panel panel-default"><div class="panel-heading"><b>' + __('Cycle Load Preview') + '</b></div><div class="panel-body">';
+		html += '<p>' + __('Total required pairs') + ': <b>' + (data.total_pairs || 0) + '</b> · ' +
+			__('Batches in cycle') + ': <b>' + (data.batches_in_cycle || 0) + '</b> · ' +
+			__('Survey frequency') + ': <b>' + frappe.utils.escape_html(data.survey_frequency || '') + '</b> · ' +
+			__('Min / batch') + ': <b>' + (data.min_surveys_per_batch || 3) + '</b> · ' +
+			__('Max / batch') + ': <b>' + (data.max_surveys_per_reviewer || 10) + '</b></p>';
+		if ((data.warnings || []).length) {
+			html += '<div class="alert alert-warning">' + data.warnings.map(frappe.utils.escape_html).join('<br>') + '</div>';
+		}
+		html += '<table class="table table-bordered table-condensed"><thead><tr><th>' + __('Reviewer') +
+			'</th><th>' + __('Required / cycle') + '</th><th>' + __('Even split') +
+			'</th><th>' + __('Per batch (applied)') + '</th></tr></thead><tbody>';
+		(data.load || []).slice(0, 40).forEach(function (r) {
+			var flags = '';
+			if (r.over_cap) flags += ' ⚠';
+			else if (r.under_min) flags += ' ↑';
+			html += '<tr' + (r.over_cap ? ' class="danger"' : (r.under_min ? ' class="warning"' : '')) + '><td>' +
+				frappe.utils.escape_html(r.reviewer_name || '') + '</td><td>' + r.required_surveys +
+				'</td><td>' + (r.even_split != null ? r.even_split : r.per_batch) +
+				'</td><td>' + r.per_batch + flags + '</td></tr>';
+		});
+		html += '</tbody></table></div></div>';
+		this.tab_roles.find('#roles-preview').html(html);
+	}
+
+	// TAB 4: Automation & Cycle
 	// ============================================================
 	render_automation_tab() {
 		var me = this;
@@ -650,52 +897,153 @@ survey_app.SurveySetup = class SurveySetup {
 
 		this.tab_automation.html(`
 			<div class="row">
-				<div class="col-md-8 offset-md-2 col-md-offset-2">
+				<div class="col-md-10 offset-md-1 col-md-offset-1">
 					<div class="panel panel-default">
-						<div class="panel-heading"><b><i class="fa fa-clock-o"></i> ${__('Automatic Survey Generation')}</b></div>
+						<div class="panel-heading"><b><i class="fa fa-clock-o"></i> ${__('Automation & Cycle')}</b></div>
 						<div class="panel-body">
-							<p class="text-muted">
-								${__('Configure how often 360° surveys are generated automatically. Short intervals are for testing only.')}
-							</p>
-							<div class="checkbox" style="margin-top:8px;">
+							<div class="form-group">
+								<label>${__('Generation Mode')}</label>
+								<select class="form-control" id="setting-gen-mode">
+									<option value="Cycle Matrix">${__('Cycle Matrix')} (${__('recommended')})</option>
+									<option value="Legacy Capped">${__('Legacy Capped')}</option>
+								</select>
+							</div>
+							<div class="checkbox">
 								<label>
 									<input type="checkbox" id="setting-auto-generate" ${settings.enable_scheduled_generation ? 'checked' : ''}>
 									<b>${__('Enable Automatic Survey Generation')}</b>
 								</label>
 							</div>
-							<div class="form-group" style="margin-top:14px;">
-								<label>${__('Generate Every')}</label>
-								<select class="form-control" id="setting-frequency">
-									<option value="">${__('Select frequency...')}</option>
-									<option value="Every 10 Minutes">${__('Every 10 Minutes')} (${__('Testing')})</option>
-									<option value="Hourly">${__('Hourly')} (${__('Testing')})</option>
-									<option value="Daily">${__('Daily')}</option>
-									<option value="Weekly">${__('Weekly')}</option>
-									<option value="Monthly">${__('Monthly')}</option>
-									<option value="Quarterly">${__('Quarterly')}</option>
-									<option value="Bi-Annually">${__('Bi-Annually')}</option>
-									<option value="Yearly">${__('Yearly')}</option>
-								</select>
-								<p class="help-box small text-muted" style="margin-top:6px;">
-									${__('Scheduler checks every 5 minutes. Use “Every 10 Minutes” or “Hourly” only for testing.')}
-								</p>
+							<div class="row">
+								<div class="col-sm-6">
+									<div class="form-group">
+										<label>${__('Survey Frequency')}</label>
+										<select class="form-control" id="setting-frequency">
+											<option value="">${__('Select...')}</option>
+											<option value="Every 10 Minutes">${__('Every 10 Minutes')} (${__('Testing')})</option>
+											<option value="Hourly">${__('Hourly')}</option>
+											<option value="Daily">${__('Daily')}</option>
+											<option value="Weekly">${__('Weekly')}</option>
+											<option value="Monthly">${__('Monthly')}</option>
+											<option value="Quarterly">${__('Quarterly')}</option>
+											<option value="Bi-Annually">${__('Bi-Annually')}</option>
+											<option value="Yearly">${__('Yearly')}</option>
+										</select>
+									</div>
+								</div>
+								<div class="col-sm-6">
+									<div class="form-group">
+										<label>${__('Completeness Cycle')}</label>
+										<select class="form-control" id="setting-completeness">
+											<option value="Monthly">${__('Monthly')}</option>
+											<option value="Quarterly">${__('Quarterly')}</option>
+											<option value="Bi-Annually">${__('Bi-Annually')}</option>
+											<option value="Yearly">${__('Yearly')}</option>
+										</select>
+									</div>
+								</div>
 							</div>
-							${settings.last_generation_date
-								? '<p class="text-muted small" style="margin-top:8px;">' + __('Last generated') + ': <b>' + frappe.utils.escape_html(settings.last_generation_date) + '</b></p>'
-								: '<p class="text-muted small" style="margin-top:8px;">' + __('Not generated yet — next scheduler tick will run if enabled.') + '</p>'}
+							<hr>
+							<div class="checkbox">
+								<label>
+									<input type="checkbox" id="setting-auto-reports" ${settings.enable_scheduled_reports ? 'checked' : ''}>
+									<b>${__('Enable Automatic Individual Reports')}</b>
+								</label>
+							</div>
+							<div class="row">
+								<div class="col-sm-6">
+									<div class="form-group">
+										<label>${__('Report Frequency')}</label>
+										<select class="form-control" id="setting-report-frequency">
+											<option value="">${__('Select...')}</option>
+											<option value="Weekly">${__('Weekly')}</option>
+											<option value="Monthly">${__('Monthly')}</option>
+											<option value="Quarterly">${__('Quarterly')}</option>
+											<option value="Bi-Annually">${__('Bi-Annually')}</option>
+											<option value="Yearly">${__('Yearly')}</option>
+										</select>
+									</div>
+								</div>
+								<div class="col-sm-6">
+									<div class="form-group">
+										<label>${__('Min Completion % for Final Report')}</label>
+										<input type="number" class="form-control" id="setting-min-completion"
+											value="${cint(settings.min_completion_pct_for_final_report) || 90}">
+									</div>
+								</div>
+							</div>
+							<div class="checkbox">
+								<label><input type="checkbox" id="setting-cc-tl" ${settings.cc_team_leader_on_report ? 'checked' : ''}> ${__('Send Digests to Team Leaders / MD')}</label>
+								<p class="help-box small text-muted" style="margin:4px 0 0 20px;">${__('Team Leaders get a team-member digest; the MD gets a leadership digest ranking managers by individual and team performance.')}</p>
+							</div>
+							<div class="checkbox">
+								<label><input type="checkbox" id="setting-cc-hr" ${settings.cc_hr_on_report ? 'checked' : ''}> ${__('Send Organisation Digest to HR')}</label>
+								<p class="help-box small text-muted" style="margin:4px 0 0 20px;">${__('HR receives all teams ranked plus individual breakdowns for every employee.')}</p>
+							</div>
 
-							<div id="countdown-panel" class="countdown-panel off">
-								<div class="countdown-label">${__('Next generation in')}</div>
+							<hr>
+							<div class="form-section-heading" style="margin-bottom:10px;">${__('Preview Reports')}</div>
+							<p class="text-muted small">${__('Three digest formats: Team Leader (members), MD (managers), HR (teams + individuals).')}</p>
+							<div class="row">
+								<div class="col-sm-3">
+									<div class="form-group">
+										<label>${__('Employee (Individual)')}</label>
+										<div class="frappe-control" id="preview-employee-link"></div>
+									</div>
+									<button class="btn btn-default btn-sm" id="preview-individual-btn">
+										<i class="fa fa-eye"></i> ${__('Preview Individual')}
+									</button>
+								</div>
+								<div class="col-sm-3">
+									<div class="form-group">
+										<label>${__('Team Leader')}</label>
+										<div class="frappe-control" id="preview-manager-link"></div>
+									</div>
+									<button class="btn btn-default btn-sm" id="preview-manager-btn">
+										<i class="fa fa-eye"></i> ${__('Preview Team Digest')}
+									</button>
+								</div>
+								<div class="col-sm-3">
+									<div class="form-group">
+										<label>${__('MD Leadership Digest')}</label>
+										<p class="text-muted small" style="min-height:28px;margin:0 0 8px;">${__('Managers ranked by individual + team')}</p>
+									</div>
+									<button class="btn btn-default btn-sm" id="preview-md-btn">
+										<i class="fa fa-eye"></i> ${__('Preview MD Digest')}
+									</button>
+								</div>
+								<div class="col-sm-3">
+									<div class="form-group">
+										<label>${__('HR Digest')}</label>
+										<p class="text-muted small" style="min-height:28px;margin:0 0 8px;">${__('All teams ranked + individuals')}</p>
+									</div>
+									<button class="btn btn-default btn-sm" id="preview-hr-btn">
+										<i class="fa fa-eye"></i> ${__('Preview HR Digest')}
+									</button>
+								</div>
+							</div>
+							<div id="report-preview-meta" class="text-muted small" style="margin-top:10px;"></div>
+							<div id="report-preview-panel" style="display:none;margin-top:14px;border:1px solid #d1d8dd;background:#f5f5f5;max-height:70vh;overflow:auto;"></div>
+
+							<div id="countdown-panel" class="countdown-panel off" style="margin-top:12px;">
+								<div class="countdown-label">${__('Next survey batch in')}</div>
 								<div class="countdown-value" id="countdown-value">—</div>
 								<div class="countdown-meta" id="countdown-meta"></div>
 							</div>
+							<div id="cycle-status-box" style="margin-top:12px;"></div>
 
 							<div style="margin-top:16px;">
 								<button class="btn btn-primary" id="save-automation-btn">
 									<i class="fa fa-save"></i> ${__('Save Automation')}
 								</button>
 								<button class="btn btn-default" id="run-auto-gen-now-btn">
-									<i class="fa fa-bolt"></i> ${__('Run Now')}
+									<i class="fa fa-bolt"></i> ${__('Run Survey Batch Now')}
+								</button>
+								<button class="btn btn-default" id="ensure-cycle-btn">
+									<i class="fa fa-refresh"></i> ${__('Build / Refresh Cycle')}
+								</button>
+								<button class="btn btn-default" id="run-reports-now-btn">
+									<i class="fa fa-envelope"></i> ${__('Send Reports Now')}
 								</button>
 								<button class="btn btn-default" id="check-auto-gen-status-btn">
 									<i class="fa fa-info-circle"></i> ${__('Check Status')}
@@ -708,9 +1056,16 @@ survey_app.SurveySetup = class SurveySetup {
 			</div>
 		`);
 
+		this.tab_automation.find('#setting-gen-mode').val(settings.generation_mode || 'Cycle Matrix');
 		if (settings.generation_frequency) {
 			this.tab_automation.find('#setting-frequency').val(settings.generation_frequency);
 		}
+		this.tab_automation.find('#setting-completeness').val(settings.completeness_cycle || 'Quarterly');
+		if (settings.report_frequency) {
+			this.tab_automation.find('#setting-report-frequency').val(settings.report_frequency);
+		}
+
+		this._init_report_preview_controls();
 
 		this.tab_automation.find('#setting-auto-generate, #setting-frequency').on('change', function() {
 			me.refresh_countdown_from_form();
@@ -719,22 +1074,32 @@ survey_app.SurveySetup = class SurveySetup {
 		this.tab_automation.find('#save-automation-btn').on('click', function() {
 			var freq = me.tab_automation.find('#setting-frequency').val() || '';
 			var enabled = me.tab_automation.find('#setting-auto-generate').is(':checked') ? 1 : 0;
+			var reports_enabled = me.tab_automation.find('#setting-auto-reports').is(':checked') ? 1 : 0;
+			var report_freq = me.tab_automation.find('#setting-report-frequency').val() || '';
 
 			if (enabled && !freq) {
-				frappe.msgprint(__('Please select a generation frequency when automatic generation is enabled.'));
+				frappe.msgprint(__('Please select a survey frequency when automatic generation is enabled.'));
+				return;
+			}
+			if (reports_enabled && !report_freq) {
+				frappe.msgprint(__('Please select a report frequency when automatic reports are enabled.'));
 				return;
 			}
 
 			var existing = me.data.settings || {};
-			var data = {
-				questions_per_category: existing.questions_per_category || 3,
-				max_surveys_per_employee: existing.max_surveys_per_employee || 10,
-				max_surveys_per_reviewer: existing.max_surveys_per_reviewer || 10,
+			var data = Object.assign({}, existing, {
 				enable_scheduled_generation: enabled,
 				generation_frequency: freq,
+				generation_mode: me.tab_automation.find('#setting-gen-mode').val() || 'Cycle Matrix',
+				completeness_cycle: me.tab_automation.find('#setting-completeness').val() || 'Quarterly',
+				enable_scheduled_reports: reports_enabled,
+				report_frequency: report_freq,
+				min_completion_pct_for_final_report: cint(me.tab_automation.find('#setting-min-completion').val()) || 90,
+				cc_team_leader_on_report: me.tab_automation.find('#setting-cc-tl').is(':checked') ? 1 : 0,
+				cc_hr_on_report: me.tab_automation.find('#setting-cc-hr').is(':checked') ? 1 : 0,
 				exclude_rated: existing.exclude_rated || [],
 				exclude_rating: existing.exclude_rating || []
-			};
+			});
 
 			frappe.call({
 				method: 'survey_app.survey_config.save_scoring_settings',
@@ -751,7 +1116,7 @@ survey_app.SurveySetup = class SurveySetup {
 
 		this.tab_automation.find('#run-auto-gen-now-btn').on('click', function() {
 			frappe.confirm(
-				__('Run automatic survey generation now? This bypasses the interval check.'),
+				__('Run the next survey batch now? This bypasses the interval check.'),
 				function() {
 					frappe.call({
 						method: 'survey_app.surveys.auto_generate_if_due',
@@ -761,12 +1126,44 @@ survey_app.SurveySetup = class SurveySetup {
 						callback: function(r) {
 							if (r.exc) return;
 							me.show_auto_gen_status(r.message);
+							me.load_cycle_status();
 							me.load_data();
 							if (r.message && r.message.status === 'generated') {
 								me.switch_tab('trail');
 							} else {
 								me.active_tab = 'automation';
 							}
+						}
+					});
+				}
+			);
+		});
+
+		this.tab_automation.find('#ensure-cycle-btn').on('click', function () {
+			frappe.call({
+				method: 'survey_app.survey_cycle.ensure_cycle',
+				args: { force_rebuild: 0 },
+				freeze: true,
+				callback: function (r) {
+					if (r.exc) return;
+					frappe.show_alert({ message: __('Cycle ready'), indicator: 'green' });
+					me.load_cycle_status();
+				}
+			});
+		});
+
+		this.tab_automation.find('#run-reports-now-btn').on('click', function () {
+			frappe.confirm(
+				__('Send individual reports, manager team digests, and HR organisation digest now?'),
+				function () {
+					frappe.call({
+						method: 'survey_app.individual_report.auto_send_reports_if_due',
+						args: { force: 1 },
+						freeze: true,
+						freeze_message: __('Sending reports...'),
+						callback: function (r) {
+							if (r.exc) return;
+							me.show_auto_gen_status(r.message);
 						}
 					});
 				}
@@ -782,9 +1179,271 @@ survey_app.SurveySetup = class SurveySetup {
 					me.apply_countdown_status(r.message);
 				}
 			});
+			me.load_cycle_status();
 		});
 
 		this.refresh_countdown_from_server();
+		this.load_cycle_status();
+	}
+
+	_init_report_preview_controls() {
+		var me = this;
+		if (!this.tab_automation || !this.tab_automation.length) return;
+
+		this.preview_employee_control = frappe.ui.form.make_control({
+			parent: this.tab_automation.find('#preview-employee-link'),
+			df: {
+				fieldtype: 'Link',
+				options: 'Employee',
+				fieldname: 'preview_employee',
+				placeholder: __('Select employee'),
+				only_select: 1,
+				get_query: function () {
+					return { filters: { status: 'Active' } };
+				}
+			},
+			render_input: true
+		});
+		this.preview_employee_control.refresh();
+
+		this.preview_manager_control = frappe.ui.form.make_control({
+			parent: this.tab_automation.find('#preview-manager-link'),
+			df: {
+				fieldtype: 'Link',
+				options: 'Employee',
+				fieldname: 'preview_manager',
+				placeholder: __('Select team leader / manager'),
+				only_select: 1,
+				get_query: function () {
+					return { filters: { status: 'Active' } };
+				}
+			},
+			render_input: true
+		});
+		this.preview_manager_control.refresh();
+
+		this.tab_automation.find('#preview-individual-btn').on('click', function () {
+			var emp = me.preview_employee_control.get_value();
+			frappe.call({
+				method: 'survey_app.individual_report.preview_employee_report',
+				args: { employee: emp || null },
+				freeze: true,
+				freeze_message: __('Building individual report preview...'),
+				callback: function (r) {
+					if (r.exc) return;
+					if (!r.message) {
+						frappe.msgprint(__('Preview returned no data.'));
+						return;
+					}
+					me._show_report_preview_dialog(r.message, __('Individual Performance Report'));
+				}
+			});
+		});
+
+		this.tab_automation.find('#preview-manager-btn').on('click', function () {
+			var mgr = me.preview_manager_control.get_value();
+			frappe.call({
+				method: 'survey_app.individual_report.preview_manager_report',
+				args: { manager: mgr || null },
+				freeze: true,
+				freeze_message: __('Building team digest preview...'),
+				callback: function (r) {
+					if (r.exc) return;
+					if (!r.message) {
+						frappe.msgprint(__('Preview returned no data.'));
+						return;
+					}
+					me._show_report_preview_dialog(r.message, __('Team Performance Digest'));
+				}
+			});
+		});
+
+		this.tab_automation.find('#preview-md-btn').on('click', function () {
+			frappe.call({
+				method: 'survey_app.individual_report.preview_md_report',
+				freeze: true,
+				freeze_message: __('Building MD leadership digest...'),
+				callback: function (r) {
+					if (r.exc) return;
+					if (!r.message) {
+						frappe.msgprint(__('Preview returned no data.'));
+						return;
+					}
+					me._show_report_preview_dialog(r.message, __('MD Leadership Digest'));
+				}
+			});
+		});
+
+		this.tab_automation.find('#preview-hr-btn').on('click', function () {
+			frappe.call({
+				method: 'survey_app.individual_report.preview_hr_report',
+				freeze: true,
+				freeze_message: __('Building HR organisation digest...'),
+				callback: function (r) {
+					if (r.exc) return;
+					if (!r.message) {
+						frappe.msgprint(__('Preview returned no data.'));
+						return;
+					}
+					me._show_report_preview_dialog(r.message, __('HR Organisation Digest'));
+				}
+			});
+		});
+	}
+
+	_resolve_preview_html(payload) {
+		if (!payload) return '';
+		// Prefer base64 — desk XSS filters often strip/empty raw HTML string fields.
+		if (payload.html_b64) {
+			try {
+				return decodeURIComponent(escape(atob(payload.html_b64)));
+			} catch (e) {
+				try {
+					return atob(payload.html_b64);
+				} catch (e2) {
+					/* fall through */
+				}
+			}
+		}
+		return payload.report_html || payload.html || '';
+	}
+
+	_extract_report_body(html) {
+		if (!html) return '';
+		var match = String(html).match(/<body[^>]*>([\s\S]*)<\/body>/i);
+		return match ? match[1] : html;
+	}
+
+	_mount_report_html($host, html) {
+		if (!$host || !$host.length) return false;
+		var body_html = this._extract_report_body(html);
+		if (!body_html) return false;
+		var shell = document.createElement('div');
+		shell.setAttribute('style', 'background:#F5F5F5;padding:16px;min-height:360px;');
+		shell.innerHTML = body_html;
+		$host.empty().append(shell);
+		return !!(shell.childNodes && shell.childNodes.length);
+	}
+
+	_show_report_preview_dialog(payload, title) {
+		var me = this;
+		var html = this._resolve_preview_html(payload);
+		if (!html) {
+			frappe.msgprint({
+				title: __('Empty Preview'),
+				message: __(
+					'No report HTML was returned (keys: {0}). Try again after a hard refresh, or confirm Roles & Org / report period data.',
+					[Object.keys(payload || {}).join(', ')]
+				),
+				indicator: 'orange'
+			});
+			return;
+		}
+
+		var meta = [];
+		if (payload.employee_name) {
+			meta.push(__('Employee') + ': <b>' + frappe.utils.escape_html(payload.employee_name) + '</b>');
+		}
+		if (payload.manager_name) {
+			meta.push(__('Manager') + ': <b>' + frappe.utils.escape_html(payload.manager_name) + '</b>');
+		}
+		if (payload.report_kind === 'hr' || payload.report_kind === 'manager' || payload.report_kind === 'md') {
+			var n = (payload.team && payload.team.length) || payload.people_count || 0;
+			if (payload.report_kind === 'md') {
+				meta.push(__('Managers ranked') + ': <b>' + (payload.managers_count || n) + '</b>');
+			} else if (payload.report_kind === 'hr') {
+				meta.push(__('Teams') + ': <b>' + (payload.teams_count || 0) + '</b>');
+				meta.push(__('People') + ': <b>' + n + '</b>');
+			} else {
+				meta.push(__('People in digest') + ': <b>' + n + '</b>');
+			}
+		}
+		if (payload.period_label) {
+			meta.push(__('Period') + ': ' + frappe.utils.escape_html(payload.period_label));
+		}
+		if (payload.overall_pct != null && payload.report_kind === 'individual') {
+			meta.push(__('Overall') + ': <b>' + payload.overall_pct + '%</b>');
+		}
+		if (payload.team_avg != null) {
+			meta.push(__('Team avg') + ': <b>' + payload.team_avg + '%</b>');
+		}
+		var meta_html = meta.join(' · ') || '';
+		this.tab_automation.find('#report-preview-meta').html(meta_html);
+
+		var $panel = this.tab_automation.find('#report-preview-panel');
+		$panel.show();
+		this._mount_report_html($panel, html);
+
+		var d = new frappe.ui.Dialog({
+			title: title || __('Report Preview'),
+			size: 'large',
+			fields: [
+				{
+					fieldtype: 'HTML',
+					fieldname: 'preview_meta',
+					options: meta_html
+						? '<div class="text-muted small" style="margin-bottom:8px;">' + meta_html + '</div>'
+						: ''
+				}
+			],
+			primary_action_label: __('Open in New Window'),
+			primary_action: function () {
+				var w = window.open('', '_blank');
+				if (!w) {
+					frappe.msgprint(__('Pop-up blocked. Use the inline preview on the Automation tab instead.'));
+					return;
+				}
+				w.document.open();
+				w.document.write(html);
+				w.document.close();
+			}
+		});
+
+		d.show();
+		d.$wrapper.find('.modal-dialog').css({ width: '920px', 'max-width': '96vw' });
+		var $body = d.$wrapper.find('.modal-body');
+		$body.css({
+			'max-height': '78vh',
+			overflow: 'auto',
+			'min-height': '420px'
+		});
+
+		// Mount on modal body directly — HTML fields can be cleared by Dialog refresh.
+		var $mount = $('<div class="survey-report-preview-mount" style="margin-top:8px;"></div>');
+		$body.append($mount);
+		var ok = me._mount_report_html($mount, html);
+		if (!ok) {
+			$mount.html(
+				'<div class="alert alert-warning">' +
+				__('Dialog preview failed. Scroll the Automation tab for the inline preview, or use Open in New Window.') +
+				'</div>'
+			);
+		}
+	}
+
+	load_cycle_status() {
+		var me = this;
+		if (!this.tab_automation || !this.tab_automation.length) return;
+		frappe.call({
+			method: 'survey_app.survey_cycle.get_cycle_status',
+			callback: function (r) {
+				if (r.exc || !r.message) return;
+				var box = me.tab_automation.find('#cycle-status-box');
+				if (r.message.status === 'ok' && r.message.cycle) {
+					var c = r.message.cycle;
+					box.html(
+						'<div class="alert alert-info" style="margin:0;">' +
+						'<b>' + __('Open Cycle') + ':</b> ' + frappe.utils.escape_html(c.title || c.name) +
+						' · ' + __('Completion') + ': <b>' + (c.completion_pct || 0) + '%</b>' +
+						' (' + (c.completed_pairs || 0) + '/' + (c.total_pairs || 0) + ')' +
+						' · ' + __('Batch') + ': ' + (c.current_batch || 0) +
+						'</div>'
+					);
+				} else {
+					box.html('<p class="text-muted small">' + __('No open cycle yet — click Build / Refresh Cycle.') + '</p>');
+				}
+			}
+		});
 	}
 
 	refresh_countdown_from_form() {

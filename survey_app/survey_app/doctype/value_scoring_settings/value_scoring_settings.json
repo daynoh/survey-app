@@ -4,19 +4,36 @@
  "creation": "2026-02-23 18:50:25.621069",
  "doctype": "DocType",
  "engine": "InnoDB",
-"field_order": [
-    "questions_per_category",
-    "excluded_departments",
-    "max_surveys_per_employee",
-    "max_surveys_per_reviewer",
-    "column_break_tepb",
-    "exclude_rated",
-    "exclude_rating",
-    "section_break_schedule",
-    "enable_scheduled_generation",
-    "generation_frequency",
-    "last_generation_date"
-   ],
+ "field_order": [
+  "questions_per_category",
+  "excluded_departments",
+  "max_surveys_per_employee",
+  "min_surveys_per_batch",
+  "max_surveys_per_reviewer",
+  "column_break_tepb",
+  "exclude_rated",
+  "exclude_rating",
+  "section_break_generation_mode",
+  "generation_mode",
+  "section_break_roles",
+  "role_resolution_mode",
+  "md_employee",
+  "team_leader_designations",
+  "team_leaders",
+  "section_break_schedule",
+  "enable_scheduled_generation",
+  "generation_frequency",
+  "completeness_cycle",
+  "column_break_schedule",
+  "last_generation_date",
+  "section_break_reports",
+  "enable_scheduled_reports",
+  "report_frequency",
+  "min_completion_pct_for_final_report",
+  "cc_team_leader_on_report",
+  "cc_hr_on_report",
+  "last_report_date"
+ ],
  "fields": [
   {
    "fieldname": "excluded_departments",
@@ -35,14 +52,22 @@
    "label": "Value Questions Per Category"
   },
   {
+   "default": "3",
+   "description": "Floor for how many surveys a reviewer gets each send when enough Planned pairs remain. Load is still split evenly across sends in the completeness cycle.",
+   "fieldname": "min_surveys_per_batch",
+   "fieldtype": "Int",
+   "label": "Minimum Surveys per Reviewer (per batch)"
+  },
+  {
+   "description": "Cap on how many surveys a reviewer can be assigned in a single batch send.",
    "fieldname": "max_surveys_per_reviewer",
    "fieldtype": "Int",
-   "label": "Maximum Surveys per Reviewer"
+   "label": "Maximum Surveys per Reviewer (per batch)"
   },
-{
-    "fieldname": "column_break_tepb",
-    "fieldtype": "Column Break"
-   },
+  {
+   "fieldname": "column_break_tepb",
+   "fieldtype": "Column Break"
+  },
   {
    "fieldname": "exclude_rated",
    "fieldtype": "Table MultiSelect",
@@ -53,39 +78,142 @@
    "fieldname": "exclude_rating",
    "fieldtype": "Table MultiSelect",
    "label": "Excluded Rating Staff (Excluded from rating others)",
-"options": "Assignment Rule User"
-   },
-   {
-    "fieldname": "section_break_schedule",
-    "fieldtype": "Section Break",
-    "label": "Automated Survey Generation"
-   },
-   {
-    "default": "0",
-    "fieldname": "enable_scheduled_generation",
-    "fieldtype": "Check",
-    "label": "Enable Automatic Survey Generation"
-   },
-   {
-    "depends_on": "eval:doc.enable_scheduled_generation",
-    "description": "Short intervals (Every 10 Minutes / Hourly) are for testing. Use Daily or longer in production.",
-    "fieldname": "generation_frequency",
-    "fieldtype": "Select",
-    "label": "Generation Frequency",
-    "options": "Every 10 Minutes\nHourly\nDaily\nWeekly\nMonthly\nQuarterly\nBi-Annually\nYearly"
-   },
-   {
-    "depends_on": "eval:doc.enable_scheduled_generation",
-    "fieldname": "last_generation_date",
-    "fieldtype": "Datetime",
-    "label": "Last Generation",
-    "read_only": 1
-   }
-  ],
+   "options": "Assignment Rule User"
+  },
+  {
+   "fieldname": "section_break_generation_mode",
+   "fieldtype": "Section Break",
+   "label": "Generation Mode"
+  },
+  {
+   "default": "Cycle Matrix",
+   "description": "Cycle Matrix plans required pairs (Team Leader, peers, MD, nearness). Legacy Capped keeps the older random load-balanced generator.",
+   "fieldname": "generation_mode",
+   "fieldtype": "Select",
+   "label": "Generation Mode",
+   "options": "Cycle Matrix\nLegacy Capped"
+  },
+  {
+   "fieldname": "section_break_roles",
+   "fieldtype": "Section Break",
+   "label": "Roles & Organisation"
+  },
+  {
+   "default": "Hybrid",
+   "description": "Manual assignments win first, then Employee org data, then Frappe roles.",
+   "fieldname": "role_resolution_mode",
+   "fieldtype": "Select",
+   "label": "Role Resolution Mode",
+   "options": "Manual\nOrg\nRole\nHybrid"
+  },
+  {
+   "fieldname": "md_employee",
+   "fieldtype": "Link",
+   "label": "Managing Director",
+   "options": "Employee"
+  },
+  {
+   "description": "Comma-separated designation names used when resolving Team Leaders from org data (e.g. Team Lead, Team Leader).",
+   "fieldname": "team_leader_designations",
+   "fieldtype": "Small Text",
+   "label": "Team Leader Designations"
+  },
+  {
+   "fieldname": "team_leaders",
+   "fieldtype": "Table",
+   "label": "Team Leaders",
+   "options": "Survey Team Leader"
+  },
+  {
+   "fieldname": "section_break_schedule",
+   "fieldtype": "Section Break",
+   "label": "Automated Survey Generation"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_scheduled_generation",
+   "fieldtype": "Check",
+   "label": "Enable Automatic Survey Generation"
+  },
+  {
+   "depends_on": "eval:doc.enable_scheduled_generation",
+   "description": "How often survey batches are issued. Short intervals are for testing.",
+   "fieldname": "generation_frequency",
+   "fieldtype": "Select",
+   "label": "Survey Frequency",
+   "options": "Every 10 Minutes\nHourly\nDaily\nWeekly\nMonthly\nQuarterly\nBi-Annually\nYearly"
+  },
+  {
+   "default": "Quarterly",
+   "description": "Window in which all required review pairs must be assigned/completed.",
+   "fieldname": "completeness_cycle",
+   "fieldtype": "Select",
+   "label": "Completeness Cycle",
+   "options": "Monthly\nQuarterly\nBi-Annually\nYearly"
+  },
+  {
+   "fieldname": "column_break_schedule",
+   "fieldtype": "Column Break"
+  },
+  {
+   "depends_on": "eval:doc.enable_scheduled_generation",
+   "fieldname": "last_generation_date",
+   "fieldtype": "Datetime",
+   "label": "Last Generation",
+   "read_only": 1
+  },
+  {
+   "fieldname": "section_break_reports",
+   "fieldtype": "Section Break",
+   "label": "Automated Individual Reports"
+  },
+  {
+   "default": "0",
+   "fieldname": "enable_scheduled_reports",
+   "fieldtype": "Check",
+   "label": "Enable Automatic Individual Reports"
+  },
+  {
+   "depends_on": "eval:doc.enable_scheduled_reports",
+   "fieldname": "report_frequency",
+   "fieldtype": "Select",
+   "label": "Report Frequency",
+   "options": "Weekly\nMonthly\nQuarterly\nBi-Annually\nYearly"
+  },
+  {
+   "default": "90",
+   "depends_on": "eval:doc.enable_scheduled_reports",
+   "description": "At or above this cycle completion %, reports are marked Final; otherwise Progress.",
+   "fieldname": "min_completion_pct_for_final_report",
+   "fieldtype": "Int",
+   "label": "Min Completion % for Final Report"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_scheduled_reports",
+   "fieldname": "cc_team_leader_on_report",
+   "fieldtype": "Check",
+   "label": "CC Team Leader on Report"
+  },
+  {
+   "default": "0",
+   "depends_on": "eval:doc.enable_scheduled_reports",
+   "fieldname": "cc_hr_on_report",
+   "fieldtype": "Check",
+   "label": "CC HR Managers on Report"
+  },
+  {
+   "depends_on": "eval:doc.enable_scheduled_reports",
+   "fieldname": "last_report_date",
+   "fieldtype": "Datetime",
+   "label": "Last Report Sent",
+   "read_only": 1
+  }
+ ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-07-27 15:30:00.000000",
+ "modified": "2026-07-30 10:00:00.000000",
  "modified_by": "Administrator",
  "module": "Survey App",
  "name": "Value Scoring Settings",
@@ -99,6 +227,16 @@
    "read": 1,
    "role": "System Manager",
    "share": 1,
+   "write": 1
+  },
+  {
+   "create": 0,
+   "delete": 0,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "HR Manager",
+   "share": 0,
    "write": 1
   }
  ],

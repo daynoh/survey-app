@@ -34,12 +34,32 @@ def get_config_data():
         settings = {
             "questions_per_category": doc.questions_per_category,
             "max_surveys_per_employee": doc.max_surveys_per_employee,
+            "min_surveys_per_batch": getattr(doc, "min_surveys_per_batch", None) or 3,
             "max_surveys_per_reviewer": doc.max_surveys_per_reviewer,
             "exclude_rated": [{"user": d.user} for d in doc.exclude_rated],
             "exclude_rating": [{"user": d.user} for d in doc.exclude_rating],
             "enable_scheduled_generation": doc.enable_scheduled_generation or 0,
             "generation_frequency": doc.generation_frequency or "",
             "last_generation_date": str(doc.last_generation_date or ""),
+            "generation_mode": getattr(doc, "generation_mode", None) or "Cycle Matrix",
+            "role_resolution_mode": getattr(doc, "role_resolution_mode", None) or "Hybrid",
+            "md_employee": getattr(doc, "md_employee", None) or "",
+            "team_leader_designations": getattr(doc, "team_leader_designations", None) or "",
+            "team_leaders": [
+                {
+                    "department": d.department,
+                    "employee": d.employee,
+                    "employee_name": d.employee_name,
+                }
+                for d in (getattr(doc, "team_leaders", None) or [])
+            ],
+            "completeness_cycle": getattr(doc, "completeness_cycle", None) or "Quarterly",
+            "enable_scheduled_reports": getattr(doc, "enable_scheduled_reports", None) or 0,
+            "report_frequency": getattr(doc, "report_frequency", None) or "",
+            "min_completion_pct_for_final_report": getattr(doc, "min_completion_pct_for_final_report", None) or 90,
+            "cc_team_leader_on_report": getattr(doc, "cc_team_leader_on_report", None) or 0,
+            "cc_hr_on_report": getattr(doc, "cc_hr_on_report", None) or 0,
+            "last_report_date": str(getattr(doc, "last_report_date", None) or ""),
         }
 
     departments = frappe.get_all("Department", fields=["name"], order_by="name")
@@ -234,6 +254,10 @@ def save_scoring_settings(settings_data):
 
     doc.questions_per_category = settings_data.get("questions_per_category") or 3
     doc.max_surveys_per_employee = settings_data.get("max_surveys_per_employee") or 10
+    if "min_surveys_per_batch" in settings_data:
+        doc.min_surveys_per_batch = settings_data.get("min_surveys_per_batch") or 3
+    elif not cint_safe(getattr(doc, "min_surveys_per_batch", None), 0):
+        doc.min_surveys_per_batch = 3
     doc.max_surveys_per_reviewer = settings_data.get("max_surveys_per_reviewer") or 10
 
     doc.exclude_rated = []
@@ -250,6 +274,35 @@ def save_scoring_settings(settings_data):
     doc.generation_frequency = settings_data.get("generation_frequency") or ""
     if settings_data.get("last_generation_date"):
         doc.last_generation_date = settings_data["last_generation_date"]
+
+    if "generation_mode" in settings_data:
+        doc.generation_mode = settings_data.get("generation_mode") or "Cycle Matrix"
+    if "role_resolution_mode" in settings_data:
+        doc.role_resolution_mode = settings_data.get("role_resolution_mode") or "Hybrid"
+    if "md_employee" in settings_data:
+        doc.md_employee = settings_data.get("md_employee") or None
+    if "team_leader_designations" in settings_data:
+        doc.team_leader_designations = settings_data.get("team_leader_designations") or ""
+    if "team_leaders" in settings_data:
+        doc.team_leaders = []
+        for entry in settings_data.get("team_leaders") or []:
+            if entry.get("department") and entry.get("employee"):
+                doc.append("team_leaders", {
+                    "department": entry.get("department"),
+                    "employee": entry.get("employee"),
+                })
+    if "completeness_cycle" in settings_data:
+        doc.completeness_cycle = settings_data.get("completeness_cycle") or "Quarterly"
+    if "enable_scheduled_reports" in settings_data:
+        doc.enable_scheduled_reports = settings_data.get("enable_scheduled_reports") or 0
+    if "report_frequency" in settings_data:
+        doc.report_frequency = settings_data.get("report_frequency") or ""
+    if "min_completion_pct_for_final_report" in settings_data:
+        doc.min_completion_pct_for_final_report = settings_data.get("min_completion_pct_for_final_report") or 90
+    if "cc_team_leader_on_report" in settings_data:
+        doc.cc_team_leader_on_report = settings_data.get("cc_team_leader_on_report") or 0
+    if "cc_hr_on_report" in settings_data:
+        doc.cc_hr_on_report = settings_data.get("cc_hr_on_report") or 0
 
     doc.save(ignore_permissions=True)
     return {"status": "saved"}
@@ -404,6 +457,8 @@ def install_workspace():
     import json
     import os
 
+    from frappe.modules.import_file import import_file_by_path
+
     base = os.path.dirname(__file__)
 
     # Ensure standard pages exist
@@ -419,6 +474,22 @@ def install_workspace():
             page_doc.flags.in_fixtures = True
             page_doc.insert(ignore_permissions=True)
             frappe.db.commit()
+
+    # Re-sync desk DocTypes so list routes (/app/survey-cycle etc.) resolve after deploy
+    doctype_dir = os.path.join(base, "survey_app", "doctype")
+    for folder in (
+        "survey_cycle",
+        "survey_cycle_pair",
+        "survey_report_log",
+        "survey_email_log",
+        "survey_team_leader",
+    ):
+        json_path = os.path.join(doctype_dir, folder, f"{folder}.json")
+        if os.path.exists(json_path):
+            try:
+                import_file_by_path(json_path, force=True, ignore_version=True)
+            except Exception:
+                frappe.log_error(title=f"Sync DocType failed: {folder}", message=frappe.get_traceback())
 
     ws_path = os.path.join(
         base, "survey_app", "workspace", "survey-administration", "survey_administration.json"
@@ -442,8 +513,20 @@ def install_workspace():
     doc.flags.in_fixtures = True
     doc.insert(ignore_permissions=True)
     frappe.db.commit()
+    frappe.clear_cache()
 
-    return {"status": "created", "name": doc.name}
+    return {
+        "status": "created",
+        "name": doc.name,
+        "doctypes": [
+            d for d in (
+                "Survey Cycle",
+                "Survey Report Log",
+                "Survey Email Log",
+            )
+            if frappe.db.exists("DocType", d)
+        ],
+    }
 
 @frappe.whitelist()
 def test_auto_generation():
