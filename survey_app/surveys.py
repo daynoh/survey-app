@@ -276,12 +276,13 @@ def create_survey_and_send_invitation(sender_employee, receiver_employee):
 
 
         # Add columns with descriptive labels
+
         column_labels = [
-            "Excellent",     # for 1
-            "Very Good",     # for 2
-            "Good",          # for 3
-            "Below Expectation",  # for 4
-            "Poor"           # for 5
+        "Poor",               # 1
+        "Below Expectation",  # 2
+        "Good",               # 3
+        "Very Good",          # 4
+        "Excellent"           # 5
         ]
         # Add columns 1-5
         for i in range(1, 6):

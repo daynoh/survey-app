@@ -140,135 +140,234 @@ def get_survey_json(survey_name):
     }
 
 
+import json
+import frappe
 
 @frappe.whitelist(allow_guest=True)
 def submit_survey(survey_id, response_data):
+    """
+    Submit survey responses with comprehensive error handling and logging.
     
+    Args:
+        survey_id: ID of the survey
+        response_data: JSON string or dict of responses
+    
+    Returns:
+        dict with status, message, total_score, and response_id
+    
+    Raises:
+        frappe.ValidationError: If validation fails
+        frappe.ServerError: If database operation fails
+    """
+    
+    try:
+        # Parse response data
+        if isinstance(response_data, str):
+            try:
+                response_data = json.loads(response_data)
+            except json.JSONDecodeError as e:
+                frappe.throw(f"Invalid JSON in response_data: {str(e)}")
 
-    if isinstance(response_data, str):
-        response_data = json.loads(response_data)
+        # Validate survey exists
+        if not frappe.db.exists("Survey", survey_id):
+            frappe.throw(f"Survey with ID '{survey_id}' does not exist")
 
-    if not frappe.db.exists("Survey", survey_id):
-        frappe.throw("Invalid Survey ID")
+        survey_doc = frappe.get_doc("Survey", survey_id)
+        user = frappe.session.user if frappe.session.user != "Guest" else None
 
-    survey_doc = frappe.get_doc("Survey", survey_id)
-    user = frappe.session.user if frappe.session.user != "Guest" else None
+        # ========== BUILD LOOKUP SETS ==========
+        try:
+            valid_questions = {q.name for q in survey_doc.questions}
+            
+            valid_options = {}
+            for q in survey_doc.questions:
+                question_doc = frappe.get_doc("Survey Questions", q.name)
+                for opt in question_doc.options:
+                    valid_options[opt.name] = opt.score or 0
+            
+            frappe.logger().info(f"Survey {survey_id}: {len(valid_questions)} questions loaded")
+        except Exception as e:
+            frappe.logger().error(f"Error loading survey data: {frappe.get_traceback()}")
+            frappe.throw(f"Error loading survey questions: {str(e)}")
 
-    # -----------------------------------------------------
-    # Build lookup sets for validation
-    # -----------------------------------------------------
+        # ========== CREATE RESPONSE DOCUMENT ==========
+        try:
+            response_doc = frappe.get_doc({
+                "doctype": "Survey Response",
+                "respondent": user,
+                "survey": survey_id,
+                "submission_date": frappe.utils.now(),
+                "answers": []
+            })
+            frappe.logger().info(f"Survey response initialized for survey {survey_id}")
+        except Exception as e:
+            frappe.logger().error(f"Error creating response document: {frappe.get_traceback()}")
+            frappe.throw(f"Failed to create response record: {str(e)}")
 
-    valid_questions = {q.name for q in survey_doc.questions}
+        total_score = 0
+        processing_errors = []
+        answer_count = 0
+        
+        # Store selections to insert separately after parent is created
+        selections_to_insert = {}
 
-    valid_options = {
-        opt.name: opt.score or 0
-        for q in survey_doc.questions
-        for opt in frappe.get_doc("Survey Questions", q.name).options
-    }
+        # ========== PROCESS ANSWERS ==========
+        for question_id, value in response_data.items():
+            try:
+                # Skip invalid questions
+                if question_id not in valid_questions:
+                    frappe.logger().warning(f"Skipping invalid question: {question_id}")
+                    continue
 
-    # -----------------------------------------------------
-    # Create response document
-    # -----------------------------------------------------
-
-    response_doc = frappe.get_doc({
-        "doctype": "Survey Response",
-        "respondent": user,
-        "survey": survey_id,
-        "submission_date": frappe.utils.now(),
-        "answers": []
-    }).insert(ignore_permissions=True)
-    frappe.db.commit()
-
-
-    total_score = 0
-
-    # -----------------------------------------------------
-    # Process answers
-    # -----------------------------------------------------
-
-    for question_id, value in response_data.items():
-
-        # Skip invalid questions
-        if question_id not in valid_questions:
-            continue
-
-        question_doc = frappe.get_doc("Survey Questions", question_id)
-
-        answer_row = response_doc.append("answers", {
-            "question": question_id,
-            "question_type": question_doc.type
-        }).save(ignore_permissions=True)
-
-        qtype = question_doc.type
-
-        # ---------------------------
-        # TEXT
-        # ---------------------------
-        if qtype == "text":
-            answer_row.text_answer = value
-
-        # ---------------------------
-        # RATING
-        # ---------------------------
-        elif qtype == "rating":
-            answer_row.number_answer = float(value)
-
-        # ---------------------------
-        # RADIO / DROPDOWN
-        # ---------------------------
-        elif qtype in ["radiogroup", "dropdown"]:
-
-            if value in valid_options:
-                answer_row.selected_option = value
-                # total_score += valid_options[value]
-
-        # ---------------------------
-        # CHECKBOX
-        # ---------------------------
-        elif qtype == "checkbox" and isinstance(value, list):
-
-            for opt_id in value:
-                if opt_id in valid_options:
-                    answer_row.append("selections", {
-                        "option": opt_id,
-                        "score": valid_options[opt_id]
+                question_doc = frappe.get_doc("Survey Questions", question_id)
+                
+                # Create answer row
+                try:
+                    answer_row = response_doc.append("answers", {
+                        "question": question_id,
+                        "question_type": question_doc.type
                     })
-                    # total_score += valid_options[opt_id]
+                    answer_count += 1
+                except Exception as e:
+                    error_msg = f"Error appending answer for question {question_id}: {str(e)}"
+                    frappe.logger().error(error_msg)
+                    processing_errors.append(error_msg)
+                    continue
 
-        # ---------------------------
-        # MATRIX
-        # value = { row_id: column_id }
-        # ---------------------------
-        elif qtype == "matrix" and isinstance(value, dict):
+                qtype = question_doc.type
 
-            for row_id, column_id in value.items():
+                # ------ TEXT ------
+                if qtype == "text":
+                    try:
+                        answer_row.text_answer = value
+                    except Exception as e:
+                        processing_errors.append(f"Text answer error for {question_id}: {str(e)}")
+                        frappe.logger().error(f"Text answer error: {str(e)}")
 
-                if column_id in valid_options:
-                    score = valid_options[column_id]
-                    answer_selections = frappe.get_doc("Survey Response Answer", answer_row)
+                # ------ RATING ------
+                elif qtype == "rating":
+                    try:
+                        answer_row.number_answer = float(value)
+                    except (ValueError, TypeError) as e:
+                        processing_errors.append(f"Invalid rating value for {question_id}: {value}")
+                        frappe.logger().error(f"Rating conversion error: {str(e)}")
 
+                # ------ RADIO / DROPDOWN ------
+                elif qtype in ["radiogroup", "dropdown"]:
+                    try:
+                        if value in valid_options:
+                            answer_row.selected_option = value
+                            total_score += valid_options[value]
+                        else:
+                            frappe.logger().warning(f"Invalid option '{value}' for question {question_id}")
+                            processing_errors.append(f"Invalid option for {question_id}")
+                    except Exception as e:
+                        processing_errors.append(f"Radio/dropdown error for {question_id}: {str(e)}")
+                        frappe.logger().error(f"Radio/dropdown error: {str(e)}")
 
-                    answer_selections.append("selections", {
-                        "row_option": row_id,
-                        "column_option": column_id,
-                        "score": score
-                    })      
-                    answer_selections.save(ignore_permissions=True)
+                # ------ CHECKBOX ------
+                elif qtype == "checkbox" and isinstance(value, list):
+                    try:
+                        selections_list = []
+                        for opt_id in value:
+                            if opt_id in valid_options:
+                                selections_list.append({
+                                    "option": opt_id,
+                                    "score": valid_options[opt_id]
+                                })
+                                total_score += valid_options[opt_id]
+                            else:
+                                frappe.logger().warning(f"Invalid checkbox option '{opt_id}' for question {question_id}")
+                        
+                        if selections_list:
+                            selections_to_insert[answer_row.idx] = selections_list
+                    except Exception as e:
+                        processing_errors.append(f"Checkbox error for {question_id}: {str(e)}")
+                        frappe.logger().error(f"Checkbox error: {str(e)}")
 
-                    # answer_row.append("selections", {
-                    #     "row_option": row_id,
-                    #     "column_option": column_id,
-                    #     "score": score
-                    # })
-                    # answer_row.append("selections",answer_selections)
+                # ------ MATRIX ------
+                elif qtype == "matrix" and isinstance(value, dict):
+                    try:
+                        selections_list = []
+                        for row_id, column_id in value.items():
+                            if column_id in valid_options:
+                                score = valid_options[column_id]
+                                selections_list.append({
+                                    "row_option": row_id,
+                                    "column_option": column_id,
+                                    "score": score
+                                })
+                                total_score += score
+                            else:
+                                frappe.logger().warning(
+                                    f"Invalid matrix option '{column_id}' for row '{row_id}' in question {question_id}"
+                                )
+                        
+                        if selections_list:
+                            selections_to_insert[answer_row.idx] = selections_list
+                    except Exception as e:
+                        processing_errors.append(f"Matrix error for {question_id}: {str(e)}")
+                        frappe.logger().error(f"Matrix processing error: {frappe.get_traceback()}")
 
-                    # total_score += score
+                elif qtype == "matrix" and not isinstance(value, dict):
+                    frappe.logger().error(f"Invalid matrix data type for {question_id}: expected dict, got {type(value)}")
+                    processing_errors.append(f"Invalid matrix format for {question_id}")
 
-    # response_doc.total_score = total_score
-    response_doc.save(ignore_permissions=True)
+            except Exception as e:
+                error_msg = f"Unexpected error processing question {question_id}: {str(e)}"
+                frappe.logger().error(error_msg)
+                processing_errors.append(error_msg)
+                continue
 
-    return {
-        "status": "success",
-        "message": "Thank you for your response!",
-        "total_score": total_score
-    }
+        # ========== INSERT RESPONSE DOC FIRST ==========
+        try:
+            response_doc.total_score = total_score
+            response_doc.insert(ignore_permissions=True)
+            frappe.db.commit()
+            frappe.logger().info(f"Survey response {response_doc.name} inserted successfully with score: {total_score}")
+        except Exception as e:
+            frappe.logger().error(f"Error inserting response document: {frappe.get_traceback()}")
+            frappe.throw(f"Failed to save survey response: {str(e)}")
+
+        # ========== INSERT SELECTIONS AFTER PARENT ==========
+        selection_count = 0
+        try:
+            for answer_row in response_doc.answers:
+                if answer_row.idx in selections_to_insert:
+                    for selection_data in selections_to_insert[answer_row.idx]:
+                        selection_doc = frappe.get_doc({
+                            "doctype": "Survey Response Selection",
+                            "parent": answer_row.name,
+                            "parenttype": "Survey Response Answer",
+                            "parentfield": "selections",
+                            **selection_data
+                        })
+                        selection_doc.insert(ignore_permissions=True)
+                        selection_count += 1
+            
+            frappe.db.commit()
+            frappe.logger().info(f"Inserted {selection_count} selections successfully")
+        except Exception as e:
+            frappe.logger().error(f"Error inserting selections: {frappe.get_traceback()}")
+            frappe.throw(f"Failed to save selections: {str(e)}")
+
+        # ========== RETURN RESPONSE ==========
+        response = {
+            "status": "success",
+            "message": "Thank you for your response!",
+            "total_score": total_score,
+            "response_id": response_doc.name
+        }
+
+        if processing_errors:
+            response["status"] = "completed_with_errors"
+            response["processing_errors"] = processing_errors
+            frappe.logger().warning(f"Survey {survey_id} completed with {len(processing_errors)} errors")
+
+        return response
+
+    except frappe.ValidationError:
+        raise
+    except Exception as e:
+        frappe.logger().error(f"Unexpected error in submit_survey: {frappe.get_traceback()}")
+        frappe.throw(f"Survey submission failed: {str(e)}")

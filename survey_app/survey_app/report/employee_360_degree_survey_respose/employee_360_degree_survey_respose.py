@@ -1,211 +1,427 @@
-# your_app/your_app/report/user_scores_by_category/user_scores_by_category.py
+"""
+Report: User Scores By Category
+Doctype: Survey Response
+
+Schema clarifications:
+  - Survey.questions          → child table: tabSurvey Questions  (sq)
+                                 sq.name (docname), sq.question_name, sq.title, sq.type
+  - Survey.questions          → also has child: tabValue Questions (vq)
+                                 vq.parent = Survey.name
+                                 vq.category (Link → Value Performance Categories)
+                                 vq.question (Long Text – stores the question TEXT, not the name)
+
+  Join strategy:
+    sra.question  →  sq.name   (Survey Response Answer.question is a Link to Survey Questions)
+    sq.title      →  vq.question  (Value Questions.question stores the display text = sq.title)
+
+  This avoids the "Unknown column vq.parent" error which happened because the previous
+  version tried to alias vq.parent in the ON clause before the subquery was resolved.
+"""
 
 import frappe
 from frappe import _
-from collections import defaultdict
+from frappe.utils import flt, cstr
 
 
 def execute(filters=None):
     filters = filters or {}
+    columns = get_columns(filters)
+    data    = get_data(filters)
+    chart   = get_chart(data, filters)
+    summary = get_report_summary(data, filters)
+    return columns, data, None, chart, summary
 
-    columns = get_columns()
-    data = get_data(filters)
 
-    return columns, data
+# ---------------------------------------------------------------------------
+# Columns
+# ---------------------------------------------------------------------------
 
-
-def get_columns():
+def get_columns(filters):
     return [
         {
-            "label": _("Employee"),
+            "label":     _("Employee"),
             "fieldname": "employee",
             "fieldtype": "Link",
-            "options": "Employee",
-            "width": 180,
+            "options":   "Employee",
+            "width":     140,
         },
         {
-            "label": _("User ID"),
-            "fieldname": "user_id",
+            "label":     _("Employee Name"),
+            "fieldname": "employee_name",
             "fieldtype": "Data",
-            "width": 220,
+            "width":     160,
         },
         {
-            "label": _("Rated By"),
-            "fieldname": "rated_by",
-            "fieldtype": "Link",
-            "options": "User",
-            "width": 180,
-        },
-        {
-            "label": _("Survey"),
+            "label":     _("Survey"),
             "fieldname": "survey",
             "fieldtype": "Link",
-            "options": "Survey",
-            "width": 180,
+            "options":   "Survey",
+            "width":     160,
         },
         {
-            "label": _("Category"),
+            "label":     _("Survey Title"),
+            "fieldname": "survey_title",
+            "fieldtype": "Data",
+            "width":     180,
+        },
+        {
+            "label":     _("Rated By"),
+            "fieldname": "rated_by",
+            "fieldtype": "Link",
+            "options":   "User",
+            "width":     150,
+        },
+        {
+            "label":     _("Category"),
             "fieldname": "category",
             "fieldtype": "Link",
-            "options": "Value Performance Categories",
-            "width": 200,
+            "options":   "Value Performance Categories",
+            "width":     160,
         },
         {
-            "label": _("Score"),
-            "fieldname": "score",
+            "label":     _("Total Questions"),
+            "fieldname": "total_questions",
+            "fieldtype": "Int",
+            "width":     120,
+        },
+        {
+            "label":     _("Total Score"),
+            "fieldname": "total_score",
             "fieldtype": "Float",
-            "width": 120,
+            "precision": 2,
+            "width":     110,
         },
         {
-            "label": _("Submission Date"),
-            "fieldname": "submission_date",
+            "label":     _("Max Possible Score"),
+            "fieldname": "max_possible_score",
+            "fieldtype": "Float",
+            "precision": 2,
+            "width":     150,
+        },
+        {
+            "label":     _("Score %"),
+            "fieldname": "score_percentage",
+            "fieldtype": "Percent",
+            "width":     100,
+        },
+        {
+            "label":     _("Responses"),
+            "fieldname": "response_count",
+            "fieldtype": "Int",
+            "width":     100,
+        },
+        {
+            "label":     _("Last Response"),
+            "fieldname": "last_response",
             "fieldtype": "Datetime",
-            "width": 180,
+            "width":     160,
         },
     ]
 
 
+# ---------------------------------------------------------------------------
+# Main data fetch
+# ---------------------------------------------------------------------------
+
 def get_data(filters):
-    conditions = ""
-    values = {}
+    conditions, values = get_conditions(filters)
 
-    # FILTERS
+    # ------------------------------------------------------------------
+    # STEP 1 – Fetch all answer rows with their category
+    #
+    # Join path:
+    #   Survey Response (sr)
+    #     → Survey (s)                         ON s.name = sr.survey
+    #     → Survey Response Answer (sra)       ON sra.parent = sr.name
+    #     → Survey Questions (sq)              ON sq.name = sra.question
+    #     → Value Questions (vq)               ON vq.parent = s.name
+    #                                          AND vq.question = sq.title
+    #     → Survey Question Options (sqo)      ON sqo.name = sra.selected_option  [direct pick]
+    #     → max_scores subquery                ON max_scores.survey_question = sq.name
+    #
+    # NOTE: vq.question is Long Text that stores the question's display title (sq.title).
+    # ------------------------------------------------------------------
 
-    if filters.get("from_date"):
-        conditions += " AND sr.submission_date >= %(from_date)s"
-        values["from_date"] = filters.get("from_date")
+    sql = f"""
+SELECT
+    sr.name                    AS response_name,
+    sr.survey                  AS survey,
+    s.title                    AS survey_title,
+    s.employee_score           AS employee,
+    s.rated_by                AS rated_by,
+    sr.respondent              AS respondent,
+    sr.submission_date        AS submission_date,
 
-    if filters.get("to_date"):
-        conditions += " AND sr.submission_date <= %(to_date)s"
-        values["to_date"] = filters.get("to_date")
+    sra.name                  AS answer_name,
+    sra.question              AS question,
+    sra.question_type         AS question_type,
 
-    if filters.get("survey"):
-        conditions += " AND sr.survey = %(survey)s"
-        values["survey"] = filters.get("survey")
+    srs.row_option           AS row_option,
+    srs.column_option        AS column_option,
+    srs.score                AS selection_score,
 
-    if filters.get("user_id"):
-        conditions += " AND emp.user_id = %(user_id)s"
-        values["user_id"] = filters.get("user_id")
+    row_opt.option_label     AS competency_question,
 
-    # MAIN QUERY
+    vq.category              AS category,
 
-    responses = frappe.db.sql(
-        f"""
-        SELECT
-            sr.name AS response_name,
-            sr.survey,
-            sr.respondent,
-            sr.submission_date,
+    col_opt.score            AS column_score,
 
-            s.employee_score,
-            s.rated_by,
+    max_scores.max_score_per_row
 
-            emp.user_id,
+FROM `tabSurvey Response` sr
+INNER JOIN `tabSurvey` s
+    ON s.name = sr.survey
 
-            sra.name AS answer_name,
-            sra.question,
-            sra.selected_option,
+INNER JOIN `tabSurvey Response Answer` sra
+    ON sra.parent = sr.name
 
-            vq.category
+-- 🔴 IMPORTANT: keep selection join
+INNER JOIN `tabSurvey Response Selection` srs
+    ON srs.parent = sra.name
 
-        FROM `tabSurvey Response` sr
+LEFT JOIN `tabSurvey Question Options` row_opt
+    ON row_opt.name = srs.row_option
 
-        INNER JOIN `tabSurvey` s
-            ON s.name = sr.survey
+LEFT JOIN `tabValue Questions` vq
+    ON vq.question = row_opt.option_label
 
-        LEFT JOIN `tabEmployee` emp
-            ON emp.name = s.employee_score
+LEFT JOIN `tabSurvey Question Options` col_opt
+    ON col_opt.name = srs.column_option
 
-        INNER JOIN `tabSurvey Response Answer` sra
-            ON sra.parent = sr.name
+LEFT JOIN (
+    SELECT
+        parent,
+        MAX(score) AS max_score_per_row
+    FROM `tabSurvey Question Options`
+    WHERE dimension_type = 'column'
+    GROUP BY parent
+) max_scores
+    ON max_scores.parent = sra.question
 
-        LEFT JOIN `tabValue Questions` vq
-            ON vq.name = sra.question
+WHERE {conditions}
 
-        WHERE sr.docstatus < 2
-        {conditions}
-        """,
-        values,
-        as_dict=True,
-    )
+ORDER BY
+    s.employee_score,
+    vq.category,
+    sr.submission_date
+"""
 
-    data = []
+    raw_rows = frappe.db.sql(sql, values, as_dict=True)
 
-    for row in responses:
-
-        total_score = 0
-
-        # SINGLE OPTION SCORE
-        if row.selected_option:
-
-            option_score = frappe.db.get_value(
-                "Survey Question Options",
-                row.selected_option,
-                "score"
-            )
-
-            total_score += option_score or 0
-
-        # MATRIX / MULTISELECT SCORES
-        selections = frappe.get_all(
-            "Survey Response Selection",
-            filters={"parent": row.answer_name},
-            fields=["score"]
-        )
-
-        for selection in selections:
-            total_score += selection.score or 0
-
-        data.append({
-            "employee": row.employee_score,
-            "user_id": row.user_id,
-            "rated_by": row.rated_by,
-            "survey": row.survey,
-            "category": row.category,
-            "score": total_score,
-            "submission_date": row.submission_date,
-        })
-
-    return merge_scores(data)
+    if not raw_rows:
+        return []
 
 
-def merge_scores(data):
-    """
-    Merge rows by:
-    Employee + User ID + Rated By + Survey + Category
-    """
+    # ------------------------------------------------------------------
+    # STEP 3 – Aggregate by (employee, survey, rated_by, category)
+    # ------------------------------------------------------------------
+    aggregation = {}
 
-    grouped_scores = defaultdict(float)
-    grouped_meta = {}
+    for row in raw_rows:
 
-    for row in data:
+        category = row.category or "Uncategorised"
 
         key = (
-            row["employee"],
-            row["user_id"],
-            row["rated_by"],
-            row["survey"],
-            row["category"],
+            cstr(row.employee),
+            cstr(row.survey),
+            cstr(row.rated_by),
+            cstr(category),
         )
 
-        grouped_scores[key] += row["score"]
+        if key not in aggregation:
+            aggregation[key] = {
+                "employee": row.employee,
+                "employee_name": "",
+                "survey": row.survey,
+                "survey_title": row.survey_title,
+                "rated_by": row.rated_by,
+                "category": category,
+                "total_score": 0.0,
+                "max_possible_score": 0.0,
+                "total_questions": 0,
+                "response_names": set(),
+                "competencies": set(),
+                "last_response": row.submission_date,
+            }
 
-        grouped_meta[key] = row
+        bucket = aggregation[key]
 
-    output = []
+        bucket["response_names"].add(row.response_name)
 
-    for key, score in grouped_scores.items():
+        competency = row.competency_question
 
-        meta = grouped_meta[key]
+        if competency and competency not in bucket["competencies"]:
+            bucket["competencies"].add(competency)
 
-        output.append({
-            "employee": meta["employee"],
-            "user_id": meta["user_id"],
-            "rated_by": meta["rated_by"],
-            "survey": meta["survey"],
-            "category": meta["category"],
-            "score": score,
-            "submission_date": meta["submission_date"],
+            bucket["total_questions"] += 1
+
+            bucket["max_possible_score"] += flt(
+                row.max_score_per_row
+            )
+
+        bucket["total_score"] += flt(
+            row.column_score or row.selection_score or 0
+        )
+
+        if (
+            row.submission_date
+            and row.submission_date > bucket["last_response"]
+        ):
+            bucket["last_response"] = row.submission_date
+
+    # ------------------------------------------------------------------
+    # STEP 4 – Resolve employee names in one query
+    # ------------------------------------------------------------------
+    employee_ids = list({v["employee"] for v in aggregation.values() if v["employee"]})
+    employee_name_map = {}
+    if employee_ids:
+        emp_rows = frappe.get_all(
+            "Employee",
+            filters={"name": ["in", employee_ids]},
+            fields=["name", "employee_name"],
+        )
+        employee_name_map = {e.name: e.employee_name for e in emp_rows}
+
+    # ------------------------------------------------------------------
+    # STEP 5 – Build output rows
+    # ------------------------------------------------------------------
+    data = []
+    for bucket in aggregation.values():
+        emp       = bucket["employee"]
+        max_score = flt(bucket["max_possible_score"])
+        total     = flt(bucket["total_score"])
+        pct       = round((total / max_score * 100) if max_score else 0.0, 2)
+
+        data.append({
+            "employee":           emp,
+            "employee_name":      employee_name_map.get(emp, ""),
+            "survey":             bucket["survey"],
+            "survey_title":       bucket["survey_title"],
+            "rated_by":           bucket["rated_by"],
+            "category":           bucket["category"],
+            "total_questions":    bucket["total_questions"],
+            "total_score":        round(total, 2),
+            "max_possible_score": round(max_score, 2),
+            "score_percentage":   pct,
+            "response_count":     len(bucket["response_names"]),
+            "last_response":      bucket["last_response"],
         })
 
-    return output
+    data.sort(key=lambda r: (cstr(r["employee"]), cstr(r["category"])))
+    return data
+
+
+# ---------------------------------------------------------------------------
+# Condition builder
+# ---------------------------------------------------------------------------
+
+def get_conditions(filters):
+    conditions = ["sr.docstatus < 2"]
+    values     = {}
+
+    if filters.get("from_date"):
+        conditions.append("sr.submission_date >= %(from_date)s")
+        values["from_date"] = filters["from_date"]
+
+    if filters.get("to_date"):
+        # Include the entire to_date day
+        conditions.append("DATE(sr.submission_date) <= %(to_date)s")
+        values["to_date"] = filters["to_date"]
+
+    if filters.get("survey"):
+        conditions.append("sr.survey = %(survey)s")
+        values["survey"] = filters["survey"]
+
+    if filters.get("employee"):
+        conditions.append("s.employee_score = %(employee)s")
+        values["employee"] = filters["employee"]
+
+    if filters.get("rated_by"):
+        conditions.append("s.rated_by = %(rated_by)s")
+        values["rated_by"] = filters["rated_by"]
+
+    if filters.get("category"):
+        conditions.append("vq.category = %(category)s")
+        values["category"] = filters["category"]
+
+    return " AND ".join(conditions), values
+
+
+# ---------------------------------------------------------------------------
+# Chart – average score % per category (bar)
+# ---------------------------------------------------------------------------
+
+def get_chart(data, filters):
+    if not data:
+        return None
+
+    cat_map = {}
+    for row in data:
+        cat = row.get("category") or "Uncategorised"
+        if cat not in cat_map:
+            cat_map[cat] = {"total": 0.0, "count": 0}
+        cat_map[cat]["total"] += flt(row["score_percentage"])
+        cat_map[cat]["count"] += 1
+
+    labels = sorted(cat_map.keys())
+    values = [
+        round(cat_map[c]["total"] / cat_map[c]["count"], 2)
+        for c in labels
+    ]
+
+    return {
+        "data": {
+            "labels":   labels,
+            "datasets": [{"name": _("Avg Score %"), "values": values}],
+        },
+        "type":      "bar",
+        "fieldtype": "Percent",
+        "colors":    ["#5E64FF"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Report summary cards
+# ---------------------------------------------------------------------------
+
+def get_report_summary(data, filters):
+    if not data:
+        return None
+
+    total_responses   = sum(r["response_count"]     for r in data)
+    total_score_sum   = sum(r["total_score"]         for r in data)
+    total_max_sum     = sum(r["max_possible_score"]  for r in data)
+    overall_pct       = round((total_score_sum / total_max_sum * 100) if total_max_sum else 0.0, 2)
+    unique_employees  = len({r["employee"] for r in data if r["employee"]})
+    unique_categories = len({r["category"] for r in data if r["category"]})
+
+    return [
+        {
+            "value":     unique_employees,
+            "label":     _("Employees Rated"),
+            "datatype":  "Int",
+            "indicator": "blue",
+        },
+        {
+            "value":     unique_categories,
+            "label":     _("Categories"),
+            "datatype":  "Int",
+            "indicator": "blue",
+        },
+        {
+            "value":     total_responses,
+            "label":     _("Total Responses"),
+            "datatype":  "Int",
+            "indicator": "blue",
+        },
+        {
+            "value":     overall_pct,
+            "label":     _("Overall Score %"),
+            "datatype":  "Percent",
+            "indicator": (
+                "green"  if overall_pct >= 70 else
+                "orange" if overall_pct >= 50 else
+                "red"
+            ),
+        },
+    ]

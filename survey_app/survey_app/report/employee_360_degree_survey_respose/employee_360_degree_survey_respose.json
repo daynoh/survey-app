@@ -6,11 +6,11 @@
  "docstatus": 0,
  "doctype": "Report",
  "filters": [],
- "idx": 0,
+ "idx": 1,
  "is_standard": "Yes",
  "letter_head": "Actserv",
  "letterhead": null,
- "modified": "2026-05-28 10:13:58.638526",
+ "modified": "2026-06-15 14:03:38.923564",
  "modified_by": "Administrator",
  "module": "Survey App",
  "name": "Employee 360 Degree Survey Respose",
@@ -22,6 +22,12 @@
  "roles": [
   {
    "role": "System Manager"
+  },
+  {
+   "role": "HR Manager"
+  },
+  {
+   "role": "Managing Director"
   }
  ]
 }
