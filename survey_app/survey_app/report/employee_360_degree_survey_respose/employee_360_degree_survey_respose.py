@@ -374,9 +374,9 @@ def get_chart(data, filters):
             "labels":   labels,
             "datasets": [{"name": _("Avg Score %"), "values": values}],
         },
-        "type":      "bar",
-        "fieldtype": "Percent",
-        "colors":    ["#5E64FF"],
+        "type":   "bar",
+        "colors": ["#5E64FF"],
+        "height": 280,
     }
 
 

@@ -15,6 +15,8 @@ from frappe.utils import (
 import math
 import random
 
+from survey_app.permissions import survey_admin_required
+
 # How long after last_generation before the next automatic run is due.
 FREQUENCY_INTERVALS = {
 	"Every 10 Minutes": {"minutes": 10},
@@ -37,6 +39,7 @@ def _next_generation_due(last_gen, freq):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def auto_generate_if_due(force=0):
 	"""Generate surveys when the configured interval has elapsed.
 
@@ -72,17 +75,26 @@ def auto_generate_if_due(force=0):
 
 	try:
 		source = "Force" if cint_force(force) else "Scheduled"
-		result = generate_capped_surveys(trigger_source=source, frequency=freq)
+		mode = getattr(settings, "generation_mode", None) or "Cycle Matrix"
+		if mode == "Cycle Matrix" and frappe.db.exists("DocType", "Survey Cycle"):
+			from survey_app.survey_cycle import run_cycle_batch
+			result = run_cycle_batch(force=force, trigger_source=source)
+		else:
+			result = generate_capped_surveys(trigger_source=source, frequency=freq)
 		settings.reload()
 		settings.last_generation_date = now
 		settings.save(ignore_permissions=True)
 		frappe.db.commit()
 		return {
 			"status": "generated",
+			"mode": mode,
 			"frequency": freq,
 			"date": str(now),
 			"created": (result or {}).get("created", 0),
 			"log": (result or {}).get("log"),
+			"cycle": (result or {}).get("cycle"),
+			"batch_no": (result or {}).get("batch_no"),
+			"completion_pct": (result or {}).get("completion_pct"),
 			"next_run": str(_next_generation_due(now, freq)),
 		}
 	except Exception as e:
@@ -106,6 +118,7 @@ def cint_force(force):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def get_auto_generation_status():
 	"""Read-only status for Survey Setup (does not generate)."""
 	settings = frappe.get_doc("Value Scoring Settings")
@@ -166,6 +179,7 @@ def get_auto_generation_status():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def generate_capped_surveys(trigger_source="Manual", frequency=None):
     settings = frappe.get_doc("Value Scoring Settings")
     frequency = frequency or settings.generation_frequency or ""
@@ -197,7 +211,7 @@ def generate_capped_surveys(trigger_source="Manual", frequency=None):
     employees = frappe.get_all(
         "Employee",
         filters={"status": "Active", "name": ["not in", list(excluded_rated)]},
-        fields=["name", "department"]
+        fields=["name", "department", "reports_to", "employee_name", "user_id", "designation"]
     )
 
     # --- Counters ---
@@ -517,7 +531,7 @@ def create_survey_and_send_invitation(sender_employee, receiver_employee):
         
     return survey_doc.name
 
-def send_survey_notification_and_task(survey_name, sender_employee, receiver_employee):
+def send_survey_notification_and_task(survey_name, sender_employee, receiver_employee, cycle=None):
     """
     Sends survey email notification and creates a Task
     assigned to the reviewer.
@@ -583,16 +597,32 @@ def send_survey_notification_and_task(survey_name, sender_employee, receiver_emp
     </div>
     """
 
-    # Send Email
+    # Send Email (tracked in Survey Email Log + Email Queue)
     email_sent = 0
     if reviewer_email:
         try:
-            frappe.sendmail(
+            from survey_app.email_log import get_open_cycle_name, send_survey_email
+
+            cycle_name = cycle
+            if not cycle_name and frappe.db.exists("DocType", "Survey Cycle Pair"):
+                cycle_name = frappe.db.get_value(
+                    "Survey Cycle Pair",
+                    {"survey": survey_name},
+                    "parent",
+                )
+            result = send_survey_email(
+                email_type="Survey Invite",
                 recipients=[reviewer_email],
                 subject=email_subject,
-                message=email_message
+                message=email_message,
+                cycle=cycle_name or get_open_cycle_name(),
+                survey=survey_name,
+                employee=receiver_employee,
+                recipient_name=reviewer_name,
+                reference_doctype="Survey",
+                reference_name=survey_name,
             )
-            email_sent = 1
+            email_sent = 1 if result.get("status") in ("queued", "sent") else 0
         except Exception:
             frappe.log_error(title="Survey Email Failed", message=frappe.get_traceback())
 

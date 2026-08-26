@@ -156,7 +156,9 @@ website_route_rules = [
 scheduler_events = {
     "cron": {
         "*/5 * * * *": [
-            "survey_app.surveys.auto_generate_if_due"
+            "survey_app.surveys.auto_generate_if_due",
+            "survey_app.individual_report.auto_send_reports_if_due",
+            "survey_app.email_log.sync_queued_email_statuses",
         ]
     },
 }

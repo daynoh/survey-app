@@ -1,8 +1,11 @@
 import frappe
 from frappe.utils import now
 
+from survey_app.permissions import survey_admin_required
+
 
 @frappe.whitelist()
+@survey_admin_required
 def get_config_data():
     categories = frappe.get_all(
         "Value Performance Categories",
@@ -78,6 +81,7 @@ def get_config_data():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def save_category(name):
     if isinstance(name, dict):
         name = name.get("value") or name.get("name") or ""
@@ -94,6 +98,7 @@ def save_category(name):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def delete_category(name):
     if not frappe.db.exists("Value Performance Categories", name):
         frappe.throw("Category not found")
@@ -105,6 +110,7 @@ def delete_category(name):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def save_question(category, question_text):
     if isinstance(question_text, dict):
         question_text = question_text.get("value") or question_text.get("question") or ""
@@ -125,6 +131,7 @@ def save_question(category, question_text):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def delete_question(name):
     if not frappe.db.exists("Value Questions", name):
         frappe.throw("Question not found")
@@ -134,6 +141,7 @@ def delete_question(name):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def save_nearness_factor(department, department2, factor):
     factor = float(factor)
     if factor < 0:
@@ -161,6 +169,7 @@ def save_nearness_factor(department, department2, factor):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def create_users():
     users_to_create = [
         {"email": "musingiladennis@gmail.com", "first_name": "Musingila", "last_name": "Dennis"},
@@ -194,6 +203,7 @@ def create_users():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def create_employees():
     user_emp_map = [
         {"email": "musingiladennis@gmail.com", "first_name": "Musingila", "last_name": "Dennis", "department": "Engineering - A"},
@@ -234,6 +244,7 @@ def create_employees():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def delete_nearness_factor(name):
     if not frappe.db.exists("Departmental Nearness Factor", name):
         frappe.throw("Nearness factor not found")
@@ -242,6 +253,7 @@ def delete_nearness_factor(name):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def save_scoring_settings(settings_data):
     if isinstance(settings_data, str):
         import json
@@ -309,6 +321,7 @@ def save_scoring_settings(settings_data):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def preview_surveys():
     if frappe.db.exists("Value Scoring Settings", "Value Scoring Settings"):
         settings = frappe.get_doc("Value Scoring Settings")
@@ -357,6 +370,7 @@ def preview_surveys():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def get_generation_trail(limit=20):
     """Return recent automatic/manual survey generation runs with recipients."""
     limit = min(cint_safe(limit, 20), 100)
@@ -416,6 +430,7 @@ def cint_safe(val, default=0):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def get_dashboard_stats():
     total_surveys = frappe.db.count("Survey")
     total_responses = frappe.db.count("Survey Response")
@@ -453,6 +468,7 @@ def get_dashboard_stats():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def install_workspace():
     import json
     import os
@@ -461,19 +477,18 @@ def install_workspace():
 
     base = os.path.dirname(__file__)
 
-    # Ensure standard pages exist
+    # Force-sync standard pages so role changes and new pages are applied on upgrades.
+    synced_pages = []
     for page_name, rel_path in (
         ("survey-analytics", os.path.join("survey_app", "page", "survey_analytics", "survey_analytics.json")),
         ("outstanding-surveys", os.path.join("survey_app", "page", "outstanding_surveys", "outstanding_surveys.json")),
+        ("my-surveys", os.path.join("survey_app", "page", "my_surveys", "my_surveys.json")),
     ):
         page_json_path = os.path.join(base, rel_path)
-        if os.path.exists(page_json_path) and not frappe.db.exists("Page", page_name):
-            with open(page_json_path) as f:
-                page_data = json.load(f)
-            page_doc = frappe.get_doc(page_data)
-            page_doc.flags.in_fixtures = True
-            page_doc.insert(ignore_permissions=True)
-            frappe.db.commit()
+        if not os.path.exists(page_json_path):
+            frappe.throw(f"Page JSON not found: {page_name}")
+        import_file_by_path(page_json_path, force=True, ignore_version=True)
+        synced_pages.append(page_name)
 
     # Re-sync desk DocTypes so list routes (/app/survey-cycle etc.) resolve after deploy
     doctype_dir = os.path.join(base, "survey_app", "doctype")
@@ -491,33 +506,65 @@ def install_workspace():
             except Exception:
                 frappe.log_error(title=f"Sync DocType failed: {folder}", message=frappe.get_traceback())
 
-    ws_path = os.path.join(
-        base, "survey_app", "workspace", "survey-administration", "survey_administration.json"
+    workspace_specs = (
+        (
+            "Survey Administration",
+            os.path.join(
+                base,
+                "survey_app",
+                "workspace",
+                "survey-administration",
+                "survey_administration.json",
+            ),
+            [{"role": "System Manager"}, {"role": "HR Manager"}],
+        ),
+        (
+            "My Survey Home",
+            os.path.join(base, "survey_app", "workspace", "my_surveys", "my_surveys.json"),
+            [],
+        ),
     )
+    synced_workspaces = []
 
-    if not os.path.exists(ws_path):
-        return {"status": "error", "message": "Workspace JSON not found"}
+    def sync_workspace(workspace_name, workspace_path, roles):
+        previous_fixture_flag = frappe.flags.in_fixtures
+        frappe.flags.in_fixtures = True
+        try:
+            if not os.path.exists(workspace_path):
+                frappe.throw(f"Workspace JSON not found: {workspace_name}")
+            # Remove the pre-release name, which conflicts with the /app/my-surveys Page route.
+            if workspace_name == "My Survey Home" and frappe.db.exists("Workspace", "My Surveys"):
+                frappe.delete_doc("Workspace", "My Surveys", ignore_permissions=True)
+            if frappe.db.exists("Workspace", workspace_name):
+                frappe.delete_doc("Workspace", workspace_name, ignore_permissions=True)
 
-    if frappe.db.exists("Workspace", "Survey Administration"):
-        frappe.delete_doc("Workspace", "Survey Administration", ignore_permissions=True)
-        frappe.db.commit()
+            with open(workspace_path) as workspace_file:
+                data = json.load(workspace_file)
+            data["title"] = data.get("title") or data.get("label") or workspace_name
+            data["label"] = workspace_name
+            data["roles"] = roles
+            data["public"] = 1
+            data["is_hidden"] = 0
+            if workspace_name == "My Survey Home":
+                # A blank module avoids Frappe's DocType-module gate for ordinary employees.
+                data["module"] = ""
 
-    with open(ws_path) as f:
-        data = json.load(f)
+            workspace_doc = frappe.get_doc(data)
+            workspace_doc.insert(ignore_permissions=True)
+            return workspace_doc.name
+        finally:
+            frappe.flags.in_fixtures = previous_fixture_flag
 
-    data["roles"] = [{"role": "System Manager"}, {"role": "HR Manager"}]
-    data["public"] = 1
-    data["is_hidden"] = 0
+    for workspace_name, workspace_path, roles in workspace_specs:
+        synced_workspaces.append(sync_workspace(workspace_name, workspace_path, roles))
 
-    doc = frappe.get_doc(data)
-    doc.flags.in_fixtures = True
-    doc.insert(ignore_permissions=True)
     frappe.db.commit()
     frappe.clear_cache()
 
     return {
-        "status": "created",
-        "name": doc.name,
+        "status": "synced",
+        "pages": synced_pages,
+        "workspaces": synced_workspaces,
         "doctypes": [
             d for d in (
                 "Survey Cycle",
@@ -529,6 +576,7 @@ def install_workspace():
     }
 
 @frappe.whitelist()
+@survey_admin_required
 def test_auto_generation():
     """Test auto-generation: enable scheduling, run, then disable (temporary test)"""
     settings = frappe.get_doc("Value Scoring Settings")

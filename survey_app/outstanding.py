@@ -1,8 +1,11 @@
 import frappe
 from frappe.utils import get_url, now_datetime, getdate, date_diff, cint, formatdate, add_days, today
 
+from survey_app.permissions import survey_admin_required
+
 
 @frappe.whitelist()
+@survey_admin_required
 def get_outstanding_surveys(filters=None, sort_by="days_pending", sort_order="desc"):
 	"""Return surveys that were sent but not yet completed, grouped by Survey Cycle."""
 	if isinstance(filters, str):
@@ -194,6 +197,7 @@ def _group_rows_by_cycle(rows):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def send_survey_reminders(surveys=None, remind_all=0):
 	"""Send reminder emails for one or more outstanding surveys."""
 	if isinstance(surveys, str):

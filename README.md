@@ -2,7 +2,24 @@
 
 Actserv Survey Engine for ERPNext / Frappe.
 
-360° employee surveys: setup, automated generation, responses, analytics, outstanding follow-ups, and generation logs.
+360° employee surveys: cycle planning, automated generation, public responses, employee dashboards, administration analytics, outstanding follow-ups, and scheduled reports.
+
+## Application status and dependencies
+
+Survey App is a **separate Frappe application**, but it is not a standalone web
+service. It runs inside a Frappe Bench and uses the ERP's HR records.
+
+| Capability | Requirement |
+|---|---|
+| Application runtime | Frappe Framework |
+| People and organisation data | ERPNext / HRMS `Employee`, `Department`, and `Designation` records |
+| Authentication and permissions | Frappe `User`, roles, sessions, and Desk |
+| Employee dashboard mapping | Each employee's ERP login must be set in `Employee.user_id` |
+| Email and automation | A configured outgoing email account, scheduler, and workers |
+
+The app has its own Survey DocTypes, pages, workspaces, reports, website route,
+and scheduled jobs. It does not copy employee master data into a separate
+database.
 
 ---
 
@@ -23,7 +40,7 @@ Installing this app on production **writes DocTypes, pages, and workspace record
 
 On the **production** bench / site you already run:
 
-1. **Frappe** + **ERPNext** (Employee and related HR data must exist; HRMS recommended if you use it for employees).
+1. **Frappe** + **ERPNext / HRMS** with the `Employee`, `Department`, and related HR DocTypes available.
 2. SSH / shell access to the server as the bench user.
 3. Ability to run `bench` for the correct site name (e.g. `yourcompany.com` — use your real site, not `erp.localhost`).
 4. Git access to this repo:
@@ -107,9 +124,14 @@ bench --site YOUR_SITE clear-cache
 bench --site YOUR_SITE clear-website-cache
 ```
 
-### 7. Install / refresh the Survey Administration workspace
+### 7. Install / refresh the workspaces and pages
 
-This creates the desk workspace (shortcuts, Outstanding Surveys, Analytics, etc.) and ensures key pages exist:
+This idempotently synchronizes:
+
+- **Survey Administration** for System Managers and HR Managers
+- **My Survey Home** for authenticated Desk users
+- Survey Analytics, Outstanding Surveys, and My Surveys pages
+- Survey cycle, report-log, email-log, and team-leader metadata
 
 ```bash
 bench --site YOUR_SITE execute survey_app.survey_config.install_workspace
@@ -131,12 +153,15 @@ Do **not** use `bench start` on production unless that is how this specific serv
 ### 9. Smoke-check in the browser
 
 1. Log in to the **production** ERP URL (not the local dev URL).
-2. Open the awesome bar → search **Survey Administration**.
-3. Confirm you can open:
+2. With an HR Manager or System Manager account, open **Survey Administration**.
+3. Confirm the administration pages open:
    - Survey Setup (`/app/survey-setup`)
    - Outstanding Surveys (`/app/outstanding-surveys`)
    - Analytics (`/app/survey-analytics`)
-4. Open **Value Scoring Settings** and configure automation / scoring as needed.
+4. With an ordinary mapped employee account, open:
+   - My Surveys (`/app/my-surveys`)
+5. Confirm the employee sees only their own aggregate results and assignments.
+6. Open **Value Scoring Settings** and configure automation / scoring as needed.
 
 ---
 
@@ -157,16 +182,27 @@ bench --site YOUR_SITE clear-cache
 bench restart   # or your normal process restart
 ```
 
-`install_workspace` recreates the **Survey Administration** workspace from the app JSON (roles default to **System Manager** and **HR Manager**). If you customized workspace roles only in the UI, re-apply those customizations after this step, or change the roles in the workspace JSON / `install_workspace` before running it.
+`install_workspace` recreates both standard workspaces from the app JSON. Survey
+Administration is restricted to **System Manager** and **HR Manager**; My Survey
+Home remains available to authenticated Desk users. If you customized workspace
+roles only in the UI, re-apply those customizations after this step or change
+the workspace JSON and `install_workspace()` before deployment.
 
 ---
 
-## Who can see Survey Administration
+## Access and privacy model
 
-By default after `install_workspace`:
+| Surface | Access |
+|---|---|
+| Survey Administration workspace and APIs | System Manager, HR Manager, or Administrator |
+| My Survey Home workspace | Authenticated Desk users |
+| `/app/my-surveys` data | The employee mapped to the current session through `Employee.user_id` |
+| Survey invitation and submission URLs | Existing public-token behavior is retained |
 
-- **System Manager**
-- **HR Manager**
+The My Surveys API never accepts an employee identifier from the browser.
+Changing request arguments cannot select another employee. Employee results
+contain aggregate scores and participation counts only—never reviewer
+identities, individual answers, comments, or coworker-level benchmark records.
 
 ### Change who sees the workspace (desk)
 
@@ -210,11 +246,80 @@ Local example site from development: `erp.localhost` on port `8001`. That site�
 
 ## After install — first-time configuration
 
-1. **Value Scoring Settings** — scoring, departments, auto-generation frequency, enable/disable schedule.
-2. **Value Performance Categories** / **Value Questions** — survey content (also via Survey Setup).
-3. **Departmental Nearness Factor** — who rates whom across departments.
-4. Confirm **Email** / email queue works (survey invites and reminders).
-5. Scheduler must be running on production so `auto_generate_if_due` can fire (cron every 5 minutes; actual run depends on settings).
+1. Open **Survey Setup → Roles & Org**
+   - Set **Managing Director**
+   - Add **Team Leaders** per department (or rely on Hybrid org/role fallback)
+   - Use **Preview Resolved Roster** and **Preview Cycle Load**
+2. Open **Survey Setup → Automation**
+   - Generation mode: **Cycle Matrix** (recommended) or Legacy Capped
+   - Choose **Survey Frequency** (e.g. Weekly) and **Completeness Cycle** (e.g. Quarterly)
+   - Optionally enable **Automatic Individual Reports** + **Report Frequency** (e.g. Monthly)
+   - **Build / Refresh Cycle**, then **Run Survey Batch Now** to smoke-test
+3. **Value Performance Categories** / **Value Questions** — survey content
+4. **Departmental Nearness Factor** — cross-department required reviewers
+5. Confirm **Email** / email queue works (invites, reminders, reports)
+6. Scheduler must be running so survey batches + report jobs can fire (`*/5` cron)
+
+### How Cycle Matrix load math works
+
+- Builds required pairs: Team Leader→team, peers in department, Team Leaders→MD, nearness externals
+- Spreads unassigned pairs across remaining batches in the completeness cycle
+- Reports at the chosen report frequency: **Final** if cycle completion ≥ threshold, else **Progress** (+ reminders)
+
+### Prepare employees for My Surveys
+
+1. Open each participating **Employee** record.
+2. Set **User ID** to that employee's ERP user.
+3. Confirm the Employee status is **Active**.
+4. Give the user normal Desk access.
+5. Ask the employee to open `/app/my-surveys`.
+
+Unmapped users receive setup guidance instead of data. Inactive employees
+receive a safe inactive-profile state.
+
+---
+
+## My Surveys employee dashboard
+
+The employee dashboard provides:
+
+- Identity, designation, department, and active-cycle context
+- Released-period selector for closed Survey Cycles and legacy Earlier Surveys
+- Overall score, prior-cycle change, organisation percentile, anonymous
+  organisation average, and reviews received
+- Competency score bars with organisation-average markers
+- Released-period performance trend and review-coverage chart
+- Executive readout for strongest competency, development priority, and
+  benchmark position
+- Pending assignments with **Complete survey** links
+- The 20 most recent completed assignments
+- Server-side From/To date filtering for pending and completed survey activity
+
+### Result release behavior
+
+- Scores from an open, generating, or reporting cycle remain locked.
+- Closing a Survey Cycle is HR's explicit release action for the dashboard.
+- The latest closed cycle is selected by default.
+- Trends use released periods only and compare a closed cycle with the
+  preceding closed cycle.
+- Legacy responses that are not associated with a cycle appear under
+  **Earlier Surveys**.
+- Activity date filters affect the task lists, not released score boundaries.
+
+---
+
+## Reporting and automation
+
+- Individual employee reports use the same cycle-aware aggregation as My
+  Surveys.
+- Team Leader, Managing Director, and HR digests provide role-appropriate
+  aggregate views.
+- Survey Email Log tracks invitations, reminders, individual reports, and
+  management reports.
+- Survey Report Log records report generation history.
+- Scheduled survey generation, report sending, and email-status synchronization
+  run through the five-minute scheduler hook; each job evaluates its configured
+  frequency before doing work.
 
 ---
 
@@ -222,11 +327,39 @@ Local example site from development: `erp.localhost` on port `8001`. That site�
 
 | Feature | Where |
 |--------|--------|
-| Setup / automation / generation trail | Survey Setup page |
+| Roles, cycle load, automation | Survey Setup page |
+| Required review cycle | Survey Cycle DocType |
 | Pending reviews + reminders | Outstanding Surveys page |
-| Scores / dashboards | Survey Analytics page |
+| Employee personal results and assignments | My Surveys (`/app/my-surveys`) |
+| Organisation scores and dashboards | Survey Analytics page |
+| Released-period trend and review coverage | My Surveys |
+| Activity date filtering | My Surveys task lists |
+| Individual report history | Survey Report Log |
+| Email delivery queue (invites / reminders / reports) | Survey Email Log — filter by Email Type + Survey Cycle |
 | Hub for all of the above | Survey Administration workspace |
-| Generation history DocType | Survey Generation Log |
+| Generation history | Survey Generation Log |
+
+---
+
+## Verification
+
+From the bench root:
+
+```bash
+# Enable only while running tests, then restore it.
+bench --site YOUR_SITE set-config allow_tests true
+bench --site YOUR_SITE run-tests --app survey_app --module survey_app.tests.test_my_surveys
+bench --site YOUR_SITE set-config allow_tests false
+
+# Static and asset checks
+env/bin/python -m compileall -q apps/survey_app/survey_app
+node --check apps/survey_app/survey_app/survey_app/page/my_surveys/my_surveys.js
+bench build --app survey_app
+```
+
+Before release, manually verify `/app/my-surveys` with an ordinary employee
+account and Survey Administration with an HR Manager account at desktop and
+mobile widths.
 
 ---
 
