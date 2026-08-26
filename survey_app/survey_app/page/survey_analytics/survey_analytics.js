@@ -107,17 +107,44 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 				<section class="sa-section">
 					<div class="sa-section-head">
 						<h2>${__('Organisational Insights')}</h2>
-						<p>${__('Department health and feedback momentum')}</p>
+						<p>${__('Department health, competency mix, and feedback momentum')}</p>
 					</div>
 					<div class="row chart-row">
 						<div class="col-md-6">
 							<div class="chart-panel">
-								<div class="chart-title">${__('Score by Department')}</div>
-								<div class="chart-sub">${__('Where performance is strongest')}</div>
+								<div class="chart-title-row">
+									<div>
+										<div class="chart-title">${__('Score by Department')}</div>
+										<div class="chart-sub" id="ch-dept-sub">${__('Overall average — toggle a category to compare')}</div>
+									</div>
+									<div class="chart-controls">
+										<select class="form-control input-sm" id="dept-cat-view" title="${__('Category')}">
+											<option value="__all__">${__('All Categories')}</option>
+										</select>
+									</div>
+								</div>
 								<div id="ch-dept" class="chart-body"></div>
 							</div>
 						</div>
 						<div class="col-md-6">
+							<div class="chart-panel">
+								<div class="chart-title-row">
+									<div>
+										<div class="chart-title">${__('Competency by Department')}</div>
+										<div class="chart-sub" id="ch-comp-dept-sub">${__('How one department scores across skills')}</div>
+									</div>
+									<div class="chart-controls">
+										<select class="form-control input-sm" id="comp-dept-view" title="${__('Department')}">
+											<option value="">${__('Select department')}</option>
+										</select>
+									</div>
+								</div>
+								<div id="ch-comp-dept" class="chart-body"></div>
+							</div>
+						</div>
+					</div>
+					<div class="row chart-row">
+						<div class="col-md-12">
 							<div class="chart-panel">
 								<div class="chart-title">${__('Feedback Over Time')}</div>
 								<div class="chart-sub">${__('Response volume and average score trend')}</div>
@@ -142,15 +169,24 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 						</div>
 						<div class="col-md-7">
 							<div class="chart-panel">
-								<div class="chart-title">${__('Employee Scorecard')}</div>
-								<div class="chart-sub">${__('Detailed scores by employee and competency')}</div>
+								<div class="chart-title-row">
+									<div>
+										<div class="chart-title">${__('Employee Scorecard')}</div>
+										<div class="chart-sub" id="scorecard-sub">${__('Average across all skills')}</div>
+									</div>
+									<div class="chart-controls">
+										<select class="form-control input-sm" id="scorecard-view" style="width:160px;">
+											<option value="__overall__">${__('Average — all skills')}</option>
+										</select>
+									</div>
+								</div>
 								<div class="table-scroll">
 									<table class="table table-hover" id="tbl-detail">
 										<thead>
 											<tr>
 												<th data-sort="employee_name">${__('Employee')}</th>
 												<th data-sort="department">${__('Department')}</th>
-												<th data-sort="category">${__('Category')}</th>
+												<th data-sort="category">${__('Skill')}</th>
 												<th data-sort="score_pct">${__('Score')}</th>
 												<th>${__('Band')}</th>
 											</tr>
@@ -279,7 +315,7 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 				gap: 6px;
 				padding-top: 14px;
 			}
-			.chart-panel .chart-controls select { width: 130px; }
+			.chart-panel .chart-controls select { width: 150px; max-width: 200px; }
 			.chart-panel .chart-sub {
 				font-size: 12px;
 				color: #7a8794;
@@ -522,18 +558,121 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 	}
 
 	function render(d) {
+		populate_view_controls(d);
 		render_summary(d.summary || []);
 		render_insights(d.insights || {});
 		render_employee_chart(d.by_employee || {});
 		bar('ch-cat', d.by_category, '#3d7a7a', false);
-		bar('ch-dept', d.by_department, '#c58a2e', false);
+		render_department_chart();
+		render_competency_by_department();
 		pie('ch-rev', d.reviewer_activity);
 		over_time(d.over_time);
-		detail(d.detail);
+		render_scorecard();
+	}
+
+	function populate_view_controls(d) {
+		var cats = (d.categories || (d.scorecard && d.scorecard.categories) || []).slice();
+		var deptCatSel = $('#dept-cat-view');
+		var currentDeptCat = deptCatSel.val() || '__all__';
+		deptCatSel.empty().append('<option value="__all__">' + __('All Categories') + '</option>');
+		cats.forEach(function (c) {
+			deptCatSel.append(
+				'<option value="' + frappe.utils.escape_html(c) + '">' +
+				frappe.utils.escape_html(c) + '</option>'
+			);
+		});
+		if (currentDeptCat === '__all__' || cats.indexOf(currentDeptCat) >= 0) {
+			deptCatSel.val(currentDeptCat);
+		}
+
+		var depts = ((d.competency_by_department || {}).departments || []).slice();
+		var compDeptSel = $('#comp-dept-view');
+		var currentDept = compDeptSel.val() || '';
+		compDeptSel.empty().append('<option value="">' + __('Select department') + '</option>');
+		depts.forEach(function (dep) {
+			compDeptSel.append(
+				'<option value="' + frappe.utils.escape_html(dep) + '">' +
+				frappe.utils.escape_html(dep) + '</option>'
+			);
+		});
+		if (currentDept && depts.indexOf(currentDept) >= 0) {
+			compDeptSel.val(currentDept);
+		} else if (depts.length) {
+			compDeptSel.val(depts[0]);
+		}
+
+		var scoreSel = $('#scorecard-view');
+		var currentScore = scoreSel.val() || '__overall__';
+		scoreSel.empty().append(
+			'<option value="__overall__">' + __('Average — all skills') + '</option>'
+		);
+		cats.forEach(function (c) {
+			scoreSel.append(
+				'<option value="' + frappe.utils.escape_html(c) + '">' +
+				frappe.utils.escape_html(c) + '</option>'
+			);
+		});
+		if (currentScore === '__overall__' || cats.indexOf(currentScore) >= 0) {
+			scoreSel.val(currentScore);
+		}
+	}
+
+	function render_department_chart() {
+		if (!data) return;
+		var pack = data.department_by_category || {};
+		var key = $('#dept-cat-view').val() || '__all__';
+		var chartData;
+		if (key === '__all__') {
+			chartData = pack.overall || data.by_department || {};
+			$('#ch-dept-sub').text(__('Overall average across all competencies'));
+		} else {
+			chartData = (pack.by_category && pack.by_category[key]) || { labels: [], values: [] };
+			$('#ch-dept-sub').text(__('Department scores for {0}', [key]));
+		}
+		bar('ch-dept', chartData, '#c58a2e', false);
+	}
+
+	function render_competency_by_department() {
+		if (!data) return;
+		var pack = data.competency_by_department || {};
+		var dept = $('#comp-dept-view').val();
+		if (!dept) {
+			$('#ch-comp-dept-sub').text(__('Select a department to see competency scores'));
+			bar('ch-comp-dept', { labels: [], values: [] }, '#2f5f73', false);
+			return;
+		}
+		var chartData = (pack.by_department && pack.by_department[dept]) || { labels: [], values: [] };
+		$('#ch-comp-dept-sub').text(__('Competency breakdown for {0}', [dept]));
+		bar('ch-comp-dept', chartData, '#2f5f73', false);
+	}
+
+	function render_scorecard() {
+		if (!data) return;
+		var sc = data.scorecard || {};
+		var key = $('#scorecard-view').val() || '__overall__';
+		var rows;
+		if (key === '__overall__') {
+			rows = sc.overall || [];
+			$('#scorecard-sub').text(__('One row per employee — average of all skills'));
+		} else {
+			rows = (sc.by_category || []).filter(function (r) { return r.category === key; });
+			$('#scorecard-sub').text(__('Scores for skill: {0}', [key]));
+		}
+		detail_rows_cache = rows;
+		render_detail_rows(rows);
 	}
 
 	$('#emp-view, #emp-sort').on('change', function () {
 		if (data) render_employee_chart(data.by_employee || {});
+	});
+	$('#dept-cat-view').on('change', function () {
+		render_department_chart();
+	});
+	$('#comp-dept-view').on('change', function () {
+		render_competency_by_department();
+	});
+	$('#scorecard-view').on('change', function () {
+		render_scorecard();
 	});
 
 	function render_employee_chart(emp_data) {

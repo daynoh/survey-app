@@ -19,6 +19,7 @@ from frappe.utils import (
 	today,
 )
 
+from survey_app.permissions import survey_admin_required
 from survey_app.surveys import FREQUENCY_INTERVALS, create_survey_and_send_invitation, send_survey_notification_and_task
 
 
@@ -65,6 +66,7 @@ def _excluded_employees(settings):
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist()
+@survey_admin_required
 def resolve_org_roles():
 	"""Resolve MD + Team Leaders using Manual → Org → Role (Hybrid order)."""
 	settings = _settings()
@@ -363,6 +365,7 @@ def _reviewer_batch_quota(remaining, batches_left, min_per, cap):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def preview_cycle_load():
 	"""Estimated load per reviewer for the planned matrix + batch size."""
 	settings = _settings()
@@ -523,6 +526,7 @@ def get_or_create_open_cycle(force_rebuild=False):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def ensure_cycle(force_rebuild=0):
 	doc = get_or_create_open_cycle(force_rebuild=cint(force_rebuild))
 	refresh_cycle_stats(doc)
@@ -599,6 +603,7 @@ def refresh_cycle_stats(doc):
 # ---------------------------------------------------------------------------
 
 @frappe.whitelist()
+@survey_admin_required
 def run_cycle_batch(force=0, trigger_source="Manual"):
 	"""Assign next batch of Planned pairs and create surveys."""
 	settings = _settings()
@@ -700,6 +705,7 @@ def run_cycle_batch(force=0, trigger_source="Manual"):
 
 
 @frappe.whitelist()
+@survey_admin_required
 def get_cycle_status():
 	if not frappe.db.exists("DocType", "Survey Cycle"):
 		return {"status": "unavailable"}

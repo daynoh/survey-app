@@ -2,8 +2,11 @@ import frappe
 from frappe.utils import flt, cstr
 from datetime import datetime, timedelta
 
+from survey_app.permissions import survey_admin_required
+
 
 @frappe.whitelist()
+@survey_admin_required
 def test_page_load():
     doc = frappe.get_doc("Page", "survey-analytics")
     doc.load_assets()
@@ -11,6 +14,7 @@ def test_page_load():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def test_setup_page():
     doc = frappe.get_doc("Page", "survey-setup")
     doc.load_assets()
@@ -20,12 +24,14 @@ def test_setup_page():
 
 
 @frappe.whitelist()
+@survey_admin_required
 def test_filters():
     import json
     return get_analytics({"department": "HR - A"})
 
 
 @frappe.whitelist()
+@survey_admin_required
 def get_analytics(filters=None):
     if isinstance(filters, str):
         import json
@@ -35,31 +41,54 @@ def get_analytics(filters=None):
     conditions, values = build_conditions(filters)
     raw = get_raw_data(conditions, values)
 
+    empty_chart = {"labels": [], "values": []}
     if not raw:
         return {
             "summary": [],
             "insights": {},
-            "by_employee": {"labels": [], "values": []},
-            "by_category": {"labels": [], "values": []},
-            "by_department": {"labels": [], "values": []},
+            "by_employee": {"labels": [], "values": [], "rows": [], "total": 0},
+            "by_category": empty_chart,
+            "by_department": empty_chart,
+            "department_by_category": {
+                "overall": empty_chart,
+                "categories": [],
+                "by_category": {},
+            },
+            "competency_by_department": {
+                "departments": [],
+                "by_department": {},
+            },
             "over_time": {"labels": [], "responses": [], "avg_score": []},
-            "reviewer_activity": {"labels": [], "values": []},
+            "reviewer_activity": empty_chart,
+            "scorecard": {
+                "overall": [],
+                "by_category": [],
+                "categories": [],
+            },
             "detail": [],
+            "categories": [],
         }
 
     # Aggregate
     aggregated = aggregate_data(raw)
     detail = build_detail(aggregated, raw)
+    scorecard = build_scorecard(aggregated)
+    department_by_category = build_department_by_category(aggregated)
+    competency_by_department = build_competency_by_department(aggregated)
 
     return {
         "summary": build_summary(aggregated, filters),
         "insights": build_insights(aggregated),
         "by_employee": build_by_employee(aggregated),
         "by_category": build_by_category(aggregated),
-        "by_department": build_by_department(aggregated),
+        "by_department": department_by_category["overall"],
+        "department_by_category": department_by_category,
+        "competency_by_department": competency_by_department,
         "over_time": build_over_time(raw),
         "reviewer_activity": build_reviewer_activity(aggregated, raw),
+        "scorecard": scorecard,
         "detail": detail,
+        "categories": scorecard.get("categories") or [],
     }
 
 
@@ -322,6 +351,126 @@ def build_by_department(aggregated):
         "labels": labels,
         "values": values,
         "title": "Avg Score % by Department",
+    }
+
+
+def build_department_by_category(aggregated):
+    """Department scores overall + per competency category (for category toggle)."""
+    overall = build_by_department(aggregated)
+
+    # dept -> cat -> scores/max
+    matrix = {}
+    categories = set()
+    for e in aggregated.values():
+        dept = e.get("department") or "No Department"
+        if dept not in matrix:
+            matrix[dept] = {}
+        for cat, cd in e.get("categories", {}).items():
+            categories.add(cat)
+            if cat not in matrix[dept]:
+                matrix[dept][cat] = {"scores": 0.0, "max_scores": 0.0}
+            matrix[dept][cat]["scores"] += cd["scores"]
+            matrix[dept][cat]["max_scores"] += cd["max_scores"]
+
+    categories = sorted(categories)
+    by_category = {}
+    for cat in categories:
+        labels = []
+        values = []
+        for dept in sorted(matrix.keys()):
+            cd = matrix[dept].get(cat)
+            if not cd or not cd["max_scores"]:
+                continue
+            labels.append(dept)
+            values.append(round(cd["scores"] / cd["max_scores"] * 100, 1))
+        by_category[cat] = {
+            "labels": labels,
+            "values": values,
+            "title": f"Avg Score % by Department — {cat}",
+        }
+
+    return {
+        "overall": overall,
+        "categories": categories,
+        "by_category": by_category,
+    }
+
+
+def build_competency_by_department(aggregated):
+    """For each department, competency (category) score breakdown."""
+    dept_cats = {}
+    all_cats = set()
+    for e in aggregated.values():
+        dept = e.get("department") or "No Department"
+        if dept not in dept_cats:
+            dept_cats[dept] = {}
+        for cat, cd in e.get("categories", {}).items():
+            all_cats.add(cat)
+            if cat not in dept_cats[dept]:
+                dept_cats[dept][cat] = {"scores": 0.0, "max_scores": 0.0}
+            dept_cats[dept][cat]["scores"] += cd["scores"]
+            dept_cats[dept][cat]["max_scores"] += cd["max_scores"]
+
+    departments = sorted(dept_cats.keys())
+    categories = sorted(all_cats)
+    by_department = {}
+    for dept in departments:
+        labels = []
+        values = []
+        for cat in categories:
+            cd = dept_cats[dept].get(cat)
+            if not cd or not cd["max_scores"]:
+                continue
+            labels.append(cat)
+            values.append(round(cd["scores"] / cd["max_scores"] * 100, 1))
+        by_department[dept] = {
+            "labels": labels,
+            "values": values,
+            "title": f"Competency scores — {dept}",
+        }
+
+    return {
+        "departments": departments,
+        "categories": categories,
+        "by_department": by_department,
+    }
+
+
+def build_scorecard(aggregated):
+    """Employee scorecard: overall average + per-skill (category) rows."""
+    overall = []
+    by_category = []
+    categories = set()
+
+    for emp, e in aggregated.items():
+        overall_pct = round(e["scores"] / e["max_scores"] * 100, 1) if e["max_scores"] else 0
+        overall.append({
+            "employee": emp,
+            "employee_name": e.get("employee_name") or emp,
+            "department": e.get("department") or "No Department",
+            "category": "All Skills",
+            "score_pct": overall_pct,
+            "responses": len(e.get("response_ids") or []),
+        })
+        for cat, cd in e.get("categories", {}).items():
+            categories.add(cat)
+            cat_pct = round(cd["scores"] / cd["max_scores"] * 100, 1) if cd.get("max_scores") else 0
+            by_category.append({
+                "employee": emp,
+                "employee_name": e.get("employee_name") or emp,
+                "department": e.get("department") or "No Department",
+                "category": cat,
+                "score_pct": cat_pct,
+                "responses": len(e.get("response_ids") or []),
+            })
+
+    overall.sort(key=lambda x: x["score_pct"], reverse=True)
+    by_category.sort(key=lambda x: x["score_pct"], reverse=True)
+
+    return {
+        "overall": overall,
+        "by_category": by_category,
+        "categories": sorted(categories),
     }
 
 
