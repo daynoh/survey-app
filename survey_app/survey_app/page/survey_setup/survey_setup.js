@@ -770,25 +770,7 @@ survey_app.SurveySetup = class SurveySetup {
 		});
 
 		this.tab_roles.find('#save-roles-btn').on('click', function () {
-			me._collect_tl_rows();
-			var existing = me.data.settings || {};
-			var data = Object.assign({}, existing, {
-				role_resolution_mode: me.tab_roles.find('#role-mode').val() || 'Hybrid',
-				md_employee: me._md_control.get_value() || '',
-				team_leader_designations: me.tab_roles.find('#tl-designations').val() || '',
-				team_leaders: me._team_leader_rows.filter(function (r) { return r.department && r.employee; })
-			});
-			frappe.call({
-				method: 'survey_app.survey_config.save_scoring_settings',
-				args: { settings_data: data },
-				freeze: true,
-				callback: function (r) {
-					if (r.exc) return;
-					frappe.show_alert({ message: __('Roles saved'), indicator: 'green' });
-					me.active_tab = 'roles';
-					me.load_data();
-				}
-			});
+			me._save_team_leaders();
 		});
 
 		this.tab_roles.find('#preview-roles-btn').on('click', function () {
@@ -876,7 +858,35 @@ survey_app.SurveySetup = class SurveySetup {
 		});
 	}
 
+	_save_team_leaders(on_done) {
+		var me = this;
+		this._collect_tl_rows();
+		var existing = this.data.settings || {};
+		var data = Object.assign({}, existing, {
+			role_resolution_mode: this.tab_roles.find('#role-mode').val() || 'Hybrid',
+			md_employee: (this._md_control && this._md_control.get_value()) || '',
+			team_leader_designations: this.tab_roles.find('#tl-designations').val() || '',
+			team_leaders: this._team_leader_rows.filter(function (r) { return r.department && r.employee; })
+		});
+		frappe.call({
+			method: 'survey_app.survey_config.save_scoring_settings',
+			args: { settings_data: data },
+			freeze: true,
+			callback: function (r) {
+				if (r.exc) return;
+				frappe.show_alert({ message: __('Roles saved'), indicator: 'green' });
+				me.active_tab = 'roles';
+				if (on_done) {
+					on_done();
+				} else {
+					me.load_data();
+				}
+			}
+		});
+	}
+
 	_show_roles_preview(data) {
+		var me = this;
 		var md = data.md;
 		var html = '<div class="panel panel-default"><div class="panel-heading"><b>' + __('Resolved Roster') + '</b></div><div class="panel-body">';
 		html += '<p><b>' + __('MD') + ':</b> ' +
@@ -886,14 +896,79 @@ survey_app.SurveySetup = class SurveySetup {
 			html += '<div class="alert alert-warning">' + data.warnings.map(frappe.utils.escape_html).join('<br>') + '</div>';
 		}
 		html += '<table class="table table-bordered table-condensed"><thead><tr><th>' + __('Department') +
-			'</th><th>' + __('Team Leader') + '</th><th>' + __('Source') + '</th><th>' + __('Team Size') + '</th></tr></thead><tbody>';
+			'</th><th>' + __('Team Leader') + '</th><th>' + __('Source') + '</th><th>' + __('Team Size') +
+			'</th><th>' + __('Actions') + '</th></tr></thead><tbody>';
 		(data.roster || []).forEach(function (r) {
+			var actions = '';
+			if (r.team_leader) {
+				actions += '<button class="btn btn-xs btn-default roster-tl-change" data-dept="' +
+					frappe.utils.escape_html(r.department || '') + '" data-employee="' +
+					frappe.utils.escape_html(r.team_leader || '') + '" data-name="' +
+					frappe.utils.escape_html(r.team_leader_name || '') + '" title="' +
+					frappe.utils.escape_html(__('Change Team Leader')) + '"><i class="fa fa-pencil"></i></button> ';
+				if (r.source === 'Manual') {
+					actions += '<button class="btn btn-xs btn-default roster-tl-remove" data-dept="' +
+						frappe.utils.escape_html(r.department || '') + '" data-name="' +
+						frappe.utils.escape_html(r.team_leader_name || '') + '" title="' +
+						frappe.utils.escape_html(__('Remove manual Team Leader')) + '"><i class="fa fa-trash"></i></button>';
+				}
+			}
 			html += '<tr><td>' + frappe.utils.escape_html(r.department || '') + '</td><td>' +
 				frappe.utils.escape_html(r.team_leader_name || '—') + '</td><td>' +
-				frappe.utils.escape_html(r.source || '—') + '</td><td>' + (r.team_size || 0) + '</td></tr>';
+				frappe.utils.escape_html(r.source || '—') + '</td><td>' + (r.team_size || 0) +
+				'</td><td>' + actions + '</td></tr>';
 		});
-		html += '</tbody></table></div></div>';
+		html += '</tbody></table>';
+		html += '<p class="text-muted small">' +
+			__('Change sets a manual override for that department; removing a manual pick falls back to automatic (org/role) resolution.') +
+			'</p>';
+		html += '</div></div>';
 		this.tab_roles.find('#roles-preview').html(html);
+
+		this.tab_roles.find('.roster-tl-change').on('click', function () {
+			var dept = $(this).data('dept');
+			var current = $(this).data('employee') || '';
+			var current_name = $(this).data('name') || '';
+			var change_dialog = new frappe.ui.Dialog({
+				title: __('Change Team Leader — {0}', [dept]),
+				fields: [
+					{ fieldtype: 'Link', fieldname: 'employee', options: 'Employee', label: __('Team Leader'), reqd: 1, default: current },
+					{ fieldtype: 'HTML', fieldname: 'tl_hint',
+						options: '<p class="text-muted small">' + __('Current: {0}', [current_name || '—']) + '</p>' }
+				],
+				primary_action_label: __('Save'),
+				primary_action: function () {
+					var employee = change_dialog.get_value('employee');
+					if (!employee) return;
+					me._collect_tl_rows();
+					me._team_leader_rows = me._team_leader_rows.filter(function (r) { return r.department !== dept; });
+					me._team_leader_rows.push({ department: dept, employee: employee, employee_name: '' });
+					change_dialog.hide();
+					me._save_team_leaders(function () {
+						me.tab_roles.find('#preview-roles-btn').trigger('click');
+					});
+				}
+			});
+			change_dialog.show();
+		});
+
+		this.tab_roles.find('.roster-tl-remove').on('click', function () {
+			var dept = $(this).data('dept');
+			var name = $(this).data('name') || '';
+			frappe.confirm(
+				__('Remove {0} as manual Team Leader for {1}? Automatic resolution will apply again.', [name, dept]),
+				function () {
+					me._collect_tl_rows();
+					me._team_leader_rows = me._team_leader_rows.filter(function (r) { return r.department !== dept; });
+					if (!me._team_leader_rows.length) {
+						me._team_leader_rows.push({ department: '', employee: '', employee_name: '' });
+					}
+					me._save_team_leaders(function () {
+						me.tab_roles.find('#preview-roles-btn').trigger('click');
+					});
+				}
+			);
+		});
 	}
 
 	_show_load_preview(data) {
@@ -916,21 +991,28 @@ survey_app.SurveySetup = class SurveySetup {
 		}
 		html += '<table class="table table-bordered table-condensed"><thead><tr><th>' + __('Reviewer') +
 			'</th><th>' + __('Required / cycle') + '</th><th>' + __('Even split') +
-			'</th><th>' + __('Per batch (applied)') + '</th></tr></thead><tbody>';
-		(data.load || []).slice(0, 40).forEach(function (r) {
+			'</th><th>' + __('Per batch (applied)') + '</th><th>' + __('Reviews received') + '</th></tr></thead><tbody>';
+		(data.load || []).slice(0, 60).forEach(function (r) {
 			var flags = '';
+			if (r.review_only) {
+				html += '<tr><td>' + frappe.utils.escape_html(r.reviewer_name || '') +
+					' <span class="label label-default">' + __('Review only') + '</span></td><td>0</td><td>—</td><td>—</td><td>' +
+					(r.reviews_received || 0) + '</td></tr>';
+				return;
+			}
 			if (r.over_cap) flags += ' ⚠';
 			else if (r.under_min) flags += ' ↑';
 			html += '<tr' + (r.over_cap ? ' class="danger"' : (r.under_min ? ' class="warning"' : '')) + '><td>' +
 				frappe.utils.escape_html(r.reviewer_name || '') + '</td><td>' + r.required_surveys +
 				'</td><td>' + (r.even_split != null ? r.even_split : r.per_batch) +
-				'</td><td>' + r.per_batch + flags + '</td></tr>';
+				'</td><td>' + r.per_batch + flags + '</td><td>' + (r.reviews_received || 0) + '</td></tr>';
 		});
 		html += '</tbody></table></div></div>';
 		this.tab_roles.find('#roles-preview').html(html);
 	}
 
 	_show_assignment_preview(data) {
+		var me = this;
 		var rows = data.rows || [];
 		var summary = data.summary || {};
 		var esc = frappe.utils.escape_html;
@@ -971,9 +1053,28 @@ survey_app.SurveySetup = class SurveySetup {
 			? '<div class="alert alert-warning" style="margin-bottom:12px;">' +
 				(data.warnings || []).map(esc).join('<br>') + '</div>'
 			: '';
+		var exclusion = data.exclusion_conflicts || null;
+		var exclusion_html = '';
+		if (exclusion && exclusion.total) {
+			var exclusion_note = __('The stored plan still contains {0} pair(s) involving {1} employee(s) now excluded from rating or being rated ({2} planned, {3} already assigned).', [
+				exclusion.total,
+				(exclusion.employees || []).length,
+				exclusion.planned || 0,
+				exclusion.assigned || 0
+			]);
+			exclusion_html = '<div class="alert alert-danger" style="margin-bottom:12px;"><b>' +
+				__('Excluded employees are still in the plan.') + '</b> ' + esc(exclusion_note) +
+				'<div class="text-muted small" style="margin-top:4px;">' +
+				esc((exclusion.employees || []).join(', ')) + '</div>' +
+				(exclusion.planned ?
+					'<button class="btn btn-sm btn-danger purge-excluded-btn" style="margin-top:8px;">' +
+					'<i class="fa fa-eraser"></i> ' + __('Remove Excluded from Plan') + '</button>' : '') +
+				'</div>';
+		}
 		var $mount = $(`
 			<div class="assignment-preview">
 				<div class="alert ${data.is_cycle_plan ? 'alert-info' : 'alert-warning'}" style="margin-bottom:12px;">${esc(source_message)}</div>
+				${exclusion_html}
 				${warning_html}
 				<div class="row" style="margin-bottom:14px;">
 					<div class="col-sm-2"><div class="well well-sm"><div class="text-muted small">${__('Required pairs')}</div><div style="font-size:22px;font-weight:600;">${summary.total_pairs || 0}</div></div></div>
@@ -1009,6 +1110,28 @@ survey_app.SurveySetup = class SurveySetup {
 			</div>
 		`);
 		dialog.$wrapper.find('.modal-body').append($mount);
+
+		$mount.find('.purge-excluded-btn').on('click', function () {
+			frappe.confirm(
+				__('Remove all planned pairs that involve employees excluded from rating or being rated? Assigned surveys are never touched.'),
+				function () {
+					frappe.call({
+						method: 'survey_app.survey_cycle.purge_excluded_pairs',
+						freeze: true,
+						freeze_message: __('Removing excluded pairs...'),
+						callback: function (r) {
+							if (r.exc || !r.message) return;
+							frappe.show_alert({
+								message: __('Removed {0} pair(s); {1} remain in the plan.', [r.message.removed, r.message.remaining_pairs]),
+								indicator: 'green'
+							});
+							dialog.hide();
+							me.tab_roles.find('#preview-assignments-btn').trigger('click');
+						}
+					});
+				}
+			);
+		});
 
 		var render_rows = function () {
 			var query = ($mount.find('.assignment-search').val() || '').trim().toLowerCase();

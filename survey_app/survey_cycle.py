@@ -628,6 +628,8 @@ def preview_cycle_load(strategy=None):
 			"per_batch": per_batch,
 			"over_cap": even > cap,
 			"under_min": even < min_per and count >= min_per,
+			"review_only": False,
+			"reviews_received": by_reviewee.get(reviewer, 0),
 		}
 		load_rows.append(row)
 		if even > cap:
@@ -640,6 +642,25 @@ def preview_cycle_load(strategy=None):
 				f"{row['reviewer_name']} even-split is ~{even}/batch "
 				f"(min {min_per}); early sends will front-load to the minimum."
 			)
+
+	# People who receive reviews but give none (e.g. the MD) still belong in the roster.
+	for reviewee, received in sorted(by_reviewee.items(), key=lambda x: (-x[1], x[0])):
+		if reviewee in by_reviewer:
+			continue
+		load_rows.append(
+			{
+				"reviewer": reviewee,
+				"reviewer_name": emp_names.get(reviewee, reviewee),
+				"required_surveys": 0,
+				"batches_in_cycle": batches,
+				"even_split": 0,
+				"per_batch": 0,
+				"over_cap": False,
+				"under_min": False,
+				"review_only": True,
+				"reviews_received": received,
+			}
+		)
 
 	if selected_strategy == BALANCED_STRATEGY:
 		excluded_reviewees, _ = _excluded_employees(settings)
@@ -693,6 +714,9 @@ def preview_cycle_load(strategy=None):
 def preview_cycle_assignments(cycle=None):
 	"""Return the exact HR-only reviewer/reviewee plan without survey responses."""
 	roles = resolve_org_roles()
+	settings = _settings()
+	excluded_reviewees, excluded_reviewers = _excluded_employees(settings)
+	warnings = list(roles.get("warnings") or [])
 	doc = None
 
 	if cycle:
@@ -734,6 +758,34 @@ def preview_cycle_assignments(cycle=None):
 		]
 		source = "calculated"
 
+	exclusion_conflicts = None
+	if source == "cycle" and (excluded_reviewees or excluded_reviewers):
+		conflict_pairs = [
+			p
+			for p in pairs
+			if p.get("reviewer") in excluded_reviewers or p.get("reviewee") in excluded_reviewees
+		]
+		if conflict_pairs:
+			planned_conflicts = sum(
+				1 for p in conflict_pairs if (p.get("status") or "Planned") == "Planned"
+			)
+			involved = set()
+			for p in conflict_pairs:
+				if p.get("reviewer") in excluded_reviewers:
+					involved.add(p["reviewer"])
+				if p.get("reviewee") in excluded_reviewees:
+					involved.add(p["reviewee"])
+			exclusion_conflicts = {
+				"total": len(conflict_pairs),
+				"planned": planned_conflicts,
+				"assigned": len(conflict_pairs) - planned_conflicts,
+				"employees": sorted(involved),
+			}
+			warnings.append(
+				f"{len(conflict_pairs)} stored pair(s) involve employees now excluded from rating "
+				"or being rated. Remove them from the plan or rebuild the cycle to apply exclusions."
+			)
+
 	employee_names = sorted(
 		{p.get("reviewer") for p in pairs if p.get("reviewer")}
 		| {p.get("reviewee") for p in pairs if p.get("reviewee")}
@@ -746,6 +798,23 @@ def preview_cycle_assignments(cycle=None):
 			fields=["name", "employee_name", "department"],
 		)
 	employees = {e.name: e for e in employee_rows}
+
+	excluded_people = []
+	if excluded_reviewees or excluded_reviewers:
+		for row in frappe.get_all(
+			"Employee",
+			filters={"name": ["in", sorted(excluded_reviewees | excluded_reviewers)]},
+			fields=["name", "employee_name"],
+			order_by="employee_name",
+		):
+			excluded_people.append(
+				{
+					"employee": row.name,
+					"employee_name": row.employee_name,
+					"cannot_rate": row.name in excluded_reviewers,
+					"cannot_be_rated": row.name in excluded_reviewees,
+				}
+			)
 
 	reviewer_load = defaultdict(int)
 	reviewee_coverage = defaultdict(int)
@@ -790,9 +859,25 @@ def preview_cycle_assignments(cycle=None):
 			"reviewer_name": (employees.get(reviewer) or frappe._dict()).get("employee_name") or reviewer,
 			"department": (employees.get(reviewer) or frappe._dict()).get("department") or "",
 			"required_surveys": count,
+			"reviews_received": reviewee_coverage.get(reviewer, 0),
+			"review_only": False,
 		}
 		for reviewer, count in reviewer_load.items()
 	]
+	# Review-only people (reviewed but reviewing nobody) stay visible with a zero load.
+	for reviewee, received in reviewee_coverage.items():
+		if reviewee in reviewer_load:
+			continue
+		load_rows.append(
+			{
+				"reviewer": reviewee,
+				"reviewer_name": (employees.get(reviewee) or frappe._dict()).get("employee_name") or reviewee,
+				"department": (employees.get(reviewee) or frappe._dict()).get("department") or "",
+				"required_surveys": 0,
+				"reviews_received": received,
+				"review_only": True,
+			}
+		)
 	load_rows.sort(key=lambda row: (-row["required_surveys"], (row["reviewer_name"] or "").lower()))
 	loads = list(reviewer_load.values())
 	departments = sorted(
@@ -827,9 +912,67 @@ def preview_cycle_assignments(cycle=None):
 		"departments": departments,
 		"rules": sorted(by_rule.keys()),
 		"statuses": sorted({row["status"] for row in rows}),
+		"exclusion_conflicts": exclusion_conflicts,
+		"excluded_people": excluded_people,
 		"load": load_rows,
 		"rows": rows,
-		"warnings": list(roles.get("warnings") or []),
+		"warnings": warnings,
+	}
+
+
+@frappe.whitelist()
+@survey_admin_required
+def purge_excluded_pairs(cycle=None):
+	"""Drop Planned pairs that involve employees excluded from rating/being rated.
+
+	Assigned/Completed pairs are never touched — they already have surveys in flight.
+	"""
+	settings = _settings()
+	excluded_reviewees, excluded_reviewers = _excluded_employees(settings)
+	if not excluded_reviewees and not excluded_reviewers:
+		frappe.throw("No employees are currently excluded from rating or being rated.")
+
+	doc = None
+	if cycle:
+		if not frappe.db.exists("Survey Cycle", cycle):
+			frappe.throw("Survey Cycle not found")
+		doc = frappe.get_doc("Survey Cycle", cycle)
+	else:
+		open_cycle = frappe.db.get_value(
+			"Survey Cycle",
+			{"status": ["in", ["Open", "Generating", "Reporting"]]},
+			"name",
+			order_by="period_start desc",
+		)
+		if open_cycle:
+			doc = frappe.get_doc("Survey Cycle", open_cycle)
+	if not doc:
+		frappe.throw("No open Survey Cycle to clean.")
+
+	kept = []
+	removed = 0
+	skipped = 0
+	for pair in doc.pairs or []:
+		involved = pair.reviewer in excluded_reviewers or pair.reviewee in excluded_reviewees
+		if involved and (pair.status or "Planned") == "Planned":
+			removed += 1
+			continue
+		if involved:
+			skipped += 1
+		kept.append(pair)
+
+	if removed:
+		doc.pairs = kept
+		doc.total_pairs = len(kept)
+		doc.flags.ignore_permissions = True
+		doc.save()
+		frappe.db.commit()
+
+	return {
+		"cycle": doc.name,
+		"removed": removed,
+		"kept_assigned_or_completed": skipped,
+		"remaining_pairs": len(kept),
 	}
 
 
