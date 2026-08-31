@@ -87,6 +87,7 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		self.assertEqual(result["rows"][0]["batch_no"], 1)
 		self.assertEqual(result["rows"][0]["reviewee_coverage"], 1)
 
+	@patch("survey_app.survey_cycle._cycle_period", return_value=("2026-07-01", "2026-09-30"))
 	@patch("survey_app.survey_cycle.build_required_pairs")
 	@patch("survey_app.survey_cycle.resolve_org_roles")
 	@patch("survey_app.survey_cycle.frappe")
@@ -95,6 +96,7 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		frappe_api,
 		resolve_org_roles,
 		build_required_pairs,
+		_cycle_period,
 	):
 		frappe_api._dict.side_effect = frappe._dict
 		frappe_api.get_doc.return_value = frappe._dict(
