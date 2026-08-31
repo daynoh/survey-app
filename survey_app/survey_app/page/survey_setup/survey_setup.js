@@ -887,7 +887,14 @@ survey_app.SurveySetup = class SurveySetup {
 			args: { settings_data: data },
 			freeze: true,
 			callback: function (r) {
-				if (r.exc) return;
+				if (r.exc) {
+					frappe.msgprint({
+						title: __('Save Failed'),
+						message: __('The roles could not be saved. Check the messages above and try again.'),
+						indicator: 'red'
+					});
+					return;
+				}
 				frappe.show_alert({ message: __('Roles saved'), indicator: 'green' });
 				me.active_tab = 'roles';
 				if (on_done) {
@@ -906,6 +913,11 @@ survey_app.SurveySetup = class SurveySetup {
 		html += '<p><b>' + __('MD') + ':</b> ' +
 			(md ? frappe.utils.escape_html(md.employee_name + ' (' + md.source + ')') : '<span class="text-danger">' + __('Not set') + '</span>') +
 			'</p>';
+		if (data.mode === 'Org') {
+			html += '<div class="alert alert-warning">' +
+				__('Role Resolution Mode is "Org", so manual MD / Team Leader picks are ignored. Switch to Hybrid or Manual for overrides to apply.') +
+				'</div>';
+		}
 		if ((data.warnings || []).length) {
 			html += '<div class="alert alert-warning">' + data.warnings.map(frappe.utils.escape_html).join('<br>') + '</div>';
 		}
@@ -976,6 +988,7 @@ survey_app.SurveySetup = class SurveySetup {
 
 	_open_tl_picker(dept, current, current_name) {
 		var me = this;
+		var mode_select = this.tab_roles.find('#role-mode');
 		var change_dialog = new frappe.ui.Dialog({
 			title: __('Team Leader — {0}', [dept]),
 			fields: [
@@ -989,6 +1002,13 @@ survey_app.SurveySetup = class SurveySetup {
 			primary_action: function () {
 				var employee = change_dialog.get_value('employee');
 				if (!employee) return;
+				if (mode_select.val() === 'Org') {
+					mode_select.val('Hybrid');
+					frappe.show_alert({
+						message: __('Role Resolution Mode was "Org"; switched to Hybrid so manual team leaders apply.'),
+						indicator: 'orange'
+					});
+				}
 				me._collect_tl_rows();
 				me._team_leader_rows = me._team_leader_rows.filter(function (r) { return r.department !== dept; });
 				me._team_leader_rows.push({ department: dept, employee: employee, employee_name: '' });
