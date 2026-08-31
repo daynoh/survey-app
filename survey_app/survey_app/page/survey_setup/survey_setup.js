@@ -506,9 +506,25 @@ survey_app.SurveySetup = class SurveySetup {
 									value="${settings.questions_per_category || 3}" min="1" max="20">
 							</div>
 							<div class="form-group">
-								<label>${__('Max Surveys per Employee')}</label>
+								<label>${__('Balanced Reviews Received per Employee')}</label>
+								<input type="number" class="form-control" id="setting-balanced-reviews-per-employee"
+									value="${settings.balanced_reviews_per_employee || 6}" min="1" max="50">
+								<p class="help-block text-muted" style="margin-top:6px;font-size:12px;">
+									${__('Normal recurring cycles aim for this many aggregate reviews per employee. Leadership assignments count toward the target.')}
+								</p>
+							</div>
+							<div class="form-group">
+								<label>${__('Balanced Maximum Surveys per Reviewer (per cycle)')}</label>
+								<input type="number" class="form-control" id="setting-balanced-max-per-reviewer"
+									value="${settings.balanced_max_surveys_per_reviewer || 10}" min="1" max="100">
+							</div>
+							<div class="form-group">
+								<label>${__('Legacy / Baseline Review Target')}</label>
 								<input type="number" class="form-control" id="setting-max-per-employee"
 									value="${settings.max_surveys_per_employee || 10}" min="1" max="50">
+								<p class="help-block text-muted" style="margin-top:6px;font-size:12px;">
+									${__('Used by Legacy Capped generation and as the external-coverage basis for Full Baseline Matrix cycles.')}
+								</p>
 							</div>
 							<div class="form-group">
 								<label>${__('Min Surveys per Reviewer (per batch)')}</label>
@@ -549,6 +565,8 @@ survey_app.SurveySetup = class SurveySetup {
 			var existing = me.data.settings || {};
 			var data = Object.assign({}, existing, {
 				questions_per_category: parseInt(me.tab_scoring.find('#setting-questions-per-cat').val(), 10) || 3,
+				balanced_reviews_per_employee: parseInt(me.tab_scoring.find('#setting-balanced-reviews-per-employee').val(), 10) || 6,
+				balanced_max_surveys_per_reviewer: parseInt(me.tab_scoring.find('#setting-balanced-max-per-reviewer').val(), 10) || 10,
 				max_surveys_per_employee: parseInt(me.tab_scoring.find('#setting-max-per-employee').val(), 10) || 10,
 				min_surveys_per_batch: parseInt(me.tab_scoring.find('#setting-min-per-batch').val(), 10) || 3,
 				max_surveys_per_reviewer: parseInt(me.tab_scoring.find('#setting-max-per-reviewer').val(), 10) || 10,
@@ -719,6 +737,9 @@ survey_app.SurveySetup = class SurveySetup {
 								<button class="btn btn-default" id="preview-load-btn">
 									<i class="fa fa-calculator"></i> ${__('Preview Cycle Load')}
 								</button>
+								<button class="btn btn-default" id="preview-assignments-btn">
+									<i class="fa fa-random"></i> ${__('Who Reviews Who')}
+								</button>
 							</div>
 							<div id="roles-preview" style="margin-top:16px;"></div>
 						</div>
@@ -788,6 +809,18 @@ survey_app.SurveySetup = class SurveySetup {
 				callback: function (r) {
 					if (r.exc || !r.message) return;
 					me._show_load_preview(r.message);
+				}
+			});
+		});
+
+		this.tab_roles.find('#preview-assignments-btn').on('click', function () {
+			frappe.call({
+				method: 'survey_app.survey_cycle.preview_cycle_assignments',
+				freeze: true,
+				freeze_message: __('Preparing assignment preview...'),
+				callback: function (r) {
+					if (r.exc || !r.message) return;
+					me._show_assignment_preview(r.message);
 				}
 			});
 		});
@@ -865,11 +898,19 @@ survey_app.SurveySetup = class SurveySetup {
 
 	_show_load_preview(data) {
 		var html = '<div class="panel panel-default"><div class="panel-heading"><b>' + __('Cycle Load Preview') + '</b></div><div class="panel-body">';
-		html += '<p>' + __('Total required pairs') + ': <b>' + (data.total_pairs || 0) + '</b> · ' +
+		html += '<p>' + __('Strategy') + ': <b>' + frappe.utils.escape_html(data.generation_strategy || 'Balanced Coverage') + '</b> · ' +
+			__('Total required pairs') + ': <b>' + (data.total_pairs || 0) + '</b> · ' +
 			__('Batches in cycle') + ': <b>' + (data.batches_in_cycle || 0) + '</b> · ' +
 			__('Survey frequency') + ': <b>' + frappe.utils.escape_html(data.survey_frequency || '') + '</b> · ' +
 			__('Min / batch') + ': <b>' + (data.min_surveys_per_batch || 3) + '</b> · ' +
 			__('Max / batch') + ': <b>' + (data.max_surveys_per_reviewer || 10) + '</b></p>';
+		html += '<p class="text-muted small">' + __('Reviewer load — average: {0}, minimum: {1}, maximum: {2}. Reviews received — minimum: {3}, maximum: {4}.', [
+			data.average_reviewer_load || 0,
+			data.minimum_reviewer_load || 0,
+			data.maximum_reviewer_load || 0,
+			data.minimum_reviews_received || 0,
+			data.maximum_reviews_received || 0
+		]) + '</p>';
 		if ((data.warnings || []).length) {
 			html += '<div class="alert alert-warning">' + data.warnings.map(frappe.utils.escape_html).join('<br>') + '</div>';
 		}
@@ -887,6 +928,121 @@ survey_app.SurveySetup = class SurveySetup {
 		});
 		html += '</tbody></table></div></div>';
 		this.tab_roles.find('#roles-preview').html(html);
+	}
+
+	_show_assignment_preview(data) {
+		var rows = data.rows || [];
+		var summary = data.summary || {};
+		var esc = frappe.utils.escape_html;
+		var rule_labels = {
+			TeamLeader: __('Team Leader → Team Member'),
+			Peer: __('Department Peer'),
+			TL_to_MD: __('Team Leader → Managing Director'),
+			Nearness: __('Departmental Nearness'),
+			Other: __('Other')
+		};
+		var option = function (value, label) {
+			return '<option value="' + esc(value || '') + '">' + esc(label || value || '') + '</option>';
+		};
+		var department_options = '<option value="">' + __('All departments') + '</option>' +
+			(data.departments || []).map(function (department) { return option(department, department); }).join('');
+		var rule_options = '<option value="">' + __('All assignment reasons') + '</option>' +
+			(data.rules || []).map(function (rule) { return option(rule, rule_labels[rule] || rule); }).join('');
+		var status_options = '<option value="">' + __('All statuses') + '</option>' +
+			(data.statuses || []).map(function (status) { return option(status, status); }).join('');
+		var cycle = data.cycle || {};
+		var strategy = data.generation_strategy || cycle.generation_strategy || 'Balanced Coverage';
+		var source_message = data.is_cycle_plan
+			? __('This is the exact {0} plan stored for {1}. Survey batches use these reviewer–reviewee pairs.', [strategy, cycle.title || cycle.name || __('the open cycle')])
+			: __('No open cycle exists. This preview uses {0}; use Build / Refresh Cycle to store the exact plan.', [strategy]);
+
+		var dialog = new frappe.ui.Dialog({
+			title: __('Who Reviews Who'),
+			size: 'large',
+			fields: [{ fieldtype: 'HTML', fieldname: 'assignment_preview_shell' }],
+			primary_action_label: __('Close'),
+			primary_action: function () { dialog.hide(); }
+		});
+		dialog.show();
+		dialog.$wrapper.find('.modal-dialog').css({ width: '1180px', 'max-width': '96vw' });
+		dialog.$wrapper.find('.modal-body').css({ 'max-height': '82vh', overflow: 'auto' });
+
+		var warning_html = (data.warnings || []).length
+			? '<div class="alert alert-warning" style="margin-bottom:12px;">' +
+				(data.warnings || []).map(esc).join('<br>') + '</div>'
+			: '';
+		var $mount = $(`
+			<div class="assignment-preview">
+				<div class="alert ${data.is_cycle_plan ? 'alert-info' : 'alert-warning'}" style="margin-bottom:12px;">${esc(source_message)}</div>
+				${warning_html}
+				<div class="row" style="margin-bottom:14px;">
+					<div class="col-sm-2"><div class="well well-sm"><div class="text-muted small">${__('Required pairs')}</div><div style="font-size:22px;font-weight:600;">${summary.total_pairs || 0}</div></div></div>
+					<div class="col-sm-2"><div class="well well-sm"><div class="text-muted small">${__('Reviewers')}</div><div style="font-size:22px;font-weight:600;">${summary.reviewers || 0}</div></div></div>
+					<div class="col-sm-2"><div class="well well-sm"><div class="text-muted small">${__('Reviewees')}</div><div style="font-size:22px;font-weight:600;">${summary.reviewees || 0}</div></div></div>
+					<div class="col-sm-2"><div class="well well-sm"><div class="text-muted small">${__('Average load')}</div><div style="font-size:22px;font-weight:600;">${summary.average_load || 0}</div></div></div>
+					<div class="col-sm-2"><div class="well well-sm"><div class="text-muted small">${__('Minimum load')}</div><div style="font-size:22px;font-weight:600;">${summary.minimum_load || 0}</div></div></div>
+					<div class="col-sm-2"><div class="well well-sm"><div class="text-muted small">${__('Maximum load')}</div><div style="font-size:22px;font-weight:600;color:#c92a2a;">${summary.maximum_load || 0}</div></div></div>
+				</div>
+				<div class="row" style="margin-bottom:12px;">
+					<div class="col-sm-3"><input class="form-control assignment-search" type="search" placeholder="${esc(__('Search employee name or ID'))}"></div>
+					<div class="col-sm-2"><select class="form-control assignment-reviewer-dept">${department_options}</select></div>
+					<div class="col-sm-2"><select class="form-control assignment-reviewee-dept">${department_options}</select></div>
+					<div class="col-sm-2"><select class="form-control assignment-rule">${rule_options}</select></div>
+					<div class="col-sm-2"><select class="form-control assignment-status">${status_options}</select></div>
+					<div class="col-sm-1"><select class="form-control assignment-load-filter" title="${esc(__('Workload filter'))}">
+						<option value="">${__('All loads')}</option>
+						<option value="above_average">${__('Above average')}</option>
+						<option value="maximum">${__('Maximum')}</option>
+					</select></div>
+				</div>
+				<div class="text-muted small assignment-result-count" style="margin-bottom:8px;"></div>
+				<div class="table-responsive" style="max-height:52vh;overflow:auto;border:1px solid #d1d8dd;">
+					<table class="table table-bordered table-hover table-condensed" style="margin:0;">
+						<thead style="position:sticky;top:0;background:#f8f9fa;z-index:1;"><tr>
+							<th>${__('Reviewer')}</th><th>${__('Reviewer department')}</th><th>${__('Cycle load')}</th>
+							<th>${__('Reviewee')}</th><th>${__('Reviewee department')}</th><th>${__('Reviews received')}</th>
+							<th>${__('Reason')}</th><th>${__('Status / batch')}</th>
+						</tr></thead>
+						<tbody class="assignment-preview-rows"></tbody>
+					</table>
+				</div>
+			</div>
+		`);
+		dialog.$wrapper.find('.modal-body').append($mount);
+
+		var render_rows = function () {
+			var query = ($mount.find('.assignment-search').val() || '').trim().toLowerCase();
+			var reviewer_department = $mount.find('.assignment-reviewer-dept').val() || '';
+			var reviewee_department = $mount.find('.assignment-reviewee-dept').val() || '';
+			var rule = $mount.find('.assignment-rule').val() || '';
+			var status = $mount.find('.assignment-status').val() || '';
+			var load_filter = $mount.find('.assignment-load-filter').val() || '';
+			var filtered = rows.filter(function (row) {
+				var searchable = [row.reviewer, row.reviewer_name, row.reviewee, row.reviewee_name].join(' ').toLowerCase();
+				if (query && searchable.indexOf(query) === -1) return false;
+				if (reviewer_department && row.reviewer_department !== reviewer_department) return false;
+				if (reviewee_department && row.reviewee_department !== reviewee_department) return false;
+				if (rule && row.rule_type !== rule) return false;
+				if (status && row.status !== status) return false;
+				if (load_filter === 'above_average' && Number(row.reviewer_cycle_load || 0) <= Number(summary.average_load || 0)) return false;
+				if (load_filter === 'maximum' && Number(row.reviewer_cycle_load || 0) !== Number(summary.maximum_load || 0)) return false;
+				return true;
+			});
+			var body = filtered.map(function (row) {
+				var status_text = row.status || __('Planned');
+				if (row.batch_no) status_text += ' · ' + __('Batch {0}', [row.batch_no]);
+				return '<tr><td><b>' + esc(row.reviewer_name || row.reviewer || '') + '</b><div class="text-muted small">' + esc(row.reviewer || '') + '</div></td>' +
+					'<td>' + esc(row.reviewer_department || '—') + '</td><td><b>' + Number(row.reviewer_cycle_load || 0) + '</b></td>' +
+					'<td><b>' + esc(row.reviewee_name || row.reviewee || '') + '</b><div class="text-muted small">' + esc(row.reviewee || '') + '</div></td>' +
+					'<td>' + esc(row.reviewee_department || '—') + '</td><td>' + Number(row.reviewee_coverage || 0) + '</td>' +
+					'<td>' + esc(rule_labels[row.rule_type] || row.rule_type || '') + '</td><td>' + esc(status_text) + '</td></tr>';
+			}).join('');
+			$mount.find('.assignment-preview-rows').html(body || '<tr><td colspan="8" class="text-center text-muted">' + __('No assignments match these filters.') + '</td></tr>');
+			$mount.find('.assignment-result-count').text(__('Showing {0} of {1} assignments', [filtered.length, rows.length]));
+		};
+		$mount.find('select').on('change', render_rows);
+		$mount.find('.assignment-search').on('input', render_rows);
+		render_rows();
 	}
 
 	// TAB 4: Automation & Cycle
@@ -907,6 +1063,26 @@ survey_app.SurveySetup = class SurveySetup {
 									<option value="Cycle Matrix">${__('Cycle Matrix')} (${__('recommended')})</option>
 									<option value="Legacy Capped">${__('Legacy Capped')}</option>
 								</select>
+							</div>
+							<div id="cycle-strategy-panel" style="border:1px solid #d1d8dd;border-radius:8px;padding:14px 16px;margin:12px 0 18px;background:#f8fafc;">
+								<div class="row">
+									<div class="col-sm-8">
+										<label>${__('Cycle Coverage Strategy')}</label>
+										<select class="form-control" id="cycle-strategy-select">
+											<option value="Balanced Coverage">${__('Balanced Coverage')} — ${__('recommended default')}</option>
+											<option value="Full Baseline Matrix">${__('Full Baseline Matrix')} — ${__('first-cycle baseline only')}</option>
+										</select>
+										<p id="cycle-strategy-help" class="help-box small text-muted" style="margin:7px 0 0;">
+											${__('Balanced Coverage spreads a representative set of reviews across the organisation while respecting leadership and departmental-nearness rules.')}
+										</p>
+									</div>
+									<div class="col-sm-4" style="padding-top:25px;">
+										<button class="btn btn-default btn-block" id="apply-cycle-strategy-btn">
+											<i class="fa fa-check-circle"></i> ${__('Apply to This Cycle')}
+										</button>
+										<div id="cycle-strategy-lock" class="small text-muted" style="margin-top:7px;text-align:center;"></div>
+									</div>
+								</div>
 							</div>
 							<div class="checkbox">
 								<label>
@@ -1057,6 +1233,7 @@ survey_app.SurveySetup = class SurveySetup {
 		`);
 
 		this.tab_automation.find('#setting-gen-mode').val(settings.generation_mode || 'Cycle Matrix');
+		this.tab_automation.find('#cycle-strategy-select').val('Balanced Coverage');
 		if (settings.generation_frequency) {
 			this.tab_automation.find('#setting-frequency').val(settings.generation_frequency);
 		}
@@ -1069,6 +1246,17 @@ survey_app.SurveySetup = class SurveySetup {
 
 		this.tab_automation.find('#setting-auto-generate, #setting-frequency').on('change', function() {
 			me.refresh_countdown_from_form();
+		});
+
+		this.tab_automation.find('#cycle-strategy-select').on('change', function () {
+			var is_baseline = $(this).val() === 'Full Baseline Matrix';
+			me.tab_automation.find('#cycle-strategy-help').text(is_baseline
+				? __('Full Baseline Matrix creates every eligible assignment allowed by the nearness matrix and leadership rules. It is intended for a deliberate first-cycle baseline and can create a much heavier workload.')
+				: __('Balanced Coverage spreads a representative set of reviews across the organisation while respecting leadership and departmental-nearness rules.'));
+		});
+
+		this.tab_automation.find('#apply-cycle-strategy-btn').on('click', function () {
+			me.apply_cycle_strategy();
 		});
 
 		this.tab_automation.find('#save-automation-btn').on('click', function() {
@@ -1421,6 +1609,54 @@ survey_app.SurveySetup = class SurveySetup {
 		}
 	}
 
+	apply_cycle_strategy() {
+		var me = this;
+		var strategy = this.tab_automation.find('#cycle-strategy-select').val() || 'Balanced Coverage';
+		frappe.call({
+			method: 'survey_app.survey_cycle.preview_cycle_load',
+			args: { strategy: strategy },
+			freeze: true,
+			freeze_message: __('Calculating cycle workload...'),
+			callback: function (r) {
+				if (r.exc || !r.message) return;
+				var preview = r.message;
+				var is_baseline = strategy === 'Full Baseline Matrix';
+				var message = '<div style="line-height:1.55;">' +
+					'<p><b>' + frappe.utils.escape_html(strategy) + '</b></p>' +
+					'<p>' + __('This plan will create {0} reviewer–reviewee assignments across approximately {1} batches.', [
+						preview.total_pairs || 0,
+						preview.batches_in_cycle || 0
+					]) + '</p>' +
+					'<p>' + __('Reviewer load: average {0}, minimum {1}, maximum {2} assignments for the cycle.', [
+						preview.average_reviewer_load || 0,
+						preview.minimum_reviewer_load || 0,
+						preview.maximum_reviewer_load || 0
+					]) + '</p>' +
+					(is_baseline
+						? '<div class="alert alert-warning" style="margin-bottom:0;">' + __('Use this only when you intentionally want the comprehensive first-cycle baseline. Later cycles should normally use Balanced Coverage.') + '</div>'
+						: '<div class="alert alert-info" style="margin-bottom:0;">' + __('Balanced Coverage is the recommended approach for recurring cycles.') + '</div>') +
+					'</div>';
+
+				frappe.confirm(message, function () {
+					frappe.call({
+						method: 'survey_app.survey_cycle.set_cycle_strategy',
+						args: { strategy: strategy },
+						freeze: true,
+						freeze_message: __('Building cycle plan...'),
+						callback: function (response) {
+							if (response.exc) return;
+							frappe.show_alert({
+								message: __('Cycle strategy set to {0}', [strategy]),
+								indicator: 'green'
+							});
+							me.load_cycle_status();
+						}
+					});
+				});
+			}
+		});
+	}
+
 	load_cycle_status() {
 		var me = this;
 		if (!this.tab_automation || !this.tab_automation.length) return;
@@ -1429,17 +1665,31 @@ survey_app.SurveySetup = class SurveySetup {
 			callback: function (r) {
 				if (r.exc || !r.message) return;
 				var box = me.tab_automation.find('#cycle-status-box');
+				var select = me.tab_automation.find('#cycle-strategy-select');
+				var apply_button = me.tab_automation.find('#apply-cycle-strategy-btn');
+				var lock_message = me.tab_automation.find('#cycle-strategy-lock');
 				if (r.message.status === 'ok' && r.message.cycle) {
 					var c = r.message.cycle;
+					var strategy = c.generation_strategy || 'Balanced Coverage';
+					var is_locked = !!c.strategy_locked;
+					select.val(strategy).prop('disabled', is_locked).trigger('change');
+					apply_button.prop('disabled', is_locked);
+					lock_message.html(is_locked
+						? '<i class="fa fa-lock"></i> ' + __('Locked after generation started')
+						: '<i class="fa fa-unlock"></i> ' + __('Editable before generation starts'));
 					box.html(
 						'<div class="alert alert-info" style="margin:0;">' +
 						'<b>' + __('Open Cycle') + ':</b> ' + frappe.utils.escape_html(c.title || c.name) +
+						' · ' + __('Strategy') + ': <b>' + frappe.utils.escape_html(strategy) + '</b>' +
 						' · ' + __('Completion') + ': <b>' + (c.completion_pct || 0) + '%</b>' +
 						' (' + (c.completed_pairs || 0) + '/' + (c.total_pairs || 0) + ')' +
 						' · ' + __('Batch') + ': ' + (c.current_batch || 0) +
 						'</div>'
 					);
 				} else {
+					select.val('Balanced Coverage').prop('disabled', false).trigger('change');
+					apply_button.prop('disabled', false);
+					lock_message.html('<i class="fa fa-info-circle"></i> ' + __('Balanced Coverage is the default'));
 					box.html('<p class="text-muted small">' + __('No open cycle yet — click Build / Refresh Cycle.') + '</p>');
 				}
 			}
@@ -1643,6 +1893,18 @@ survey_app.SurveySetup = class SurveySetup {
 							<p class="text-muted">
 								${__('Preview the allocation based on current scoring settings, then generate surveys for all active employees.')}
 							</p>
+							<div class="row" style="margin:14px 0 18px;padding:14px 0;border-top:1px solid #e8ebed;border-bottom:1px solid #e8ebed;">
+								<div class="col-sm-8">
+									<label>${__('Preview survey for employee')}</label>
+									<div id="reviewer-preview-reviewee"></div>
+									<p class="text-muted small" style="margin:6px 0 0;">${__('Questions are sampled from the current 360° question pool, just as they are during generation.')}</p>
+								</div>
+								<div class="col-sm-4" style="padding-top:25px;">
+									<button class="btn btn-default btn-block" id="preview-reviewer-experience-btn">
+										<i class="fa fa-external-link"></i> ${__('Preview Reviewer Experience')}
+									</button>
+								</div>
+							</div>
 							<div id="preview-section"></div>
 							<div style="text-align:center;margin-top:20px;">
 								<button class="btn btn-default" id="preview-surveys-btn">
@@ -1658,6 +1920,37 @@ survey_app.SurveySetup = class SurveySetup {
 				</div>
 			</div>
 		`);
+
+		this.reviewer_preview_reviewee_control = frappe.ui.form.make_control({
+			parent: this.tab_generate.find('#reviewer-preview-reviewee'),
+			df: {
+				fieldtype: 'Link',
+				options: 'Employee',
+				fieldname: 'reviewer_preview_reviewee',
+				placeholder: __('Select an active employee'),
+				only_select: 1,
+				get_query: function () {
+					return { filters: { status: 'Active' } };
+				}
+			},
+			render_input: true
+		});
+		this.reviewer_preview_reviewee_control.refresh();
+
+		this.tab_generate.find('#preview-reviewer-experience-btn').on('click', function () {
+			var reviewee = me.reviewer_preview_reviewee_control.get_value();
+			if (!reviewee) {
+				frappe.msgprint(__('Select the employee who should appear as the person being reviewed.'));
+				return;
+			}
+			var preview_url = '/survey-preview?reviewee=' + encodeURIComponent(reviewee);
+			var preview_window = window.open(preview_url, '_blank');
+			if (!preview_window) {
+				frappe.msgprint(__('The preview window was blocked. Allow pop-ups for this site and try again.'));
+				return;
+			}
+			preview_window.opener = null;
+		});
 
 		this.tab_generate.find('#preview-surveys-btn').on('click', function() {
 			frappe.call({

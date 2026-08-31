@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import math
 from collections import defaultdict
 from datetime import date
@@ -29,6 +30,10 @@ CYCLE_INTERVALS = {
 	"Bi-Annually": {"months": 6},
 	"Yearly": {"months": 12},
 }
+
+BALANCED_STRATEGY = "Balanced Coverage"
+FULL_BASELINE_STRATEGY = "Full Baseline Matrix"
+CYCLE_STRATEGIES = {BALANCED_STRATEGY, FULL_BASELINE_STRATEGY}
 
 
 def _settings():
@@ -268,10 +273,20 @@ def _role_warnings(md, team_leaders, departments):
 # Required matrix + load preview
 # ---------------------------------------------------------------------------
 
-def build_required_pairs(roles=None):
-	"""Return list of {reviewer, reviewee, rule_type} for the cycle matrix."""
+def _normalise_cycle_strategy(strategy=None):
+	strategy = strategy or BALANCED_STRATEGY
+	if strategy not in CYCLE_STRATEGIES:
+		frappe.throw(f"Unsupported cycle strategy: {strategy}")
+	return strategy
+
+
+def _stable_token(seed, *parts):
+	value = "|".join(str(part or "") for part in (seed, *parts))
+	return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _pair_context(roles):
 	settings = _settings()
-	roles = roles or resolve_org_roles()
 	excluded_reviewees, excluded_reviewers = _excluded_employees(settings)
 	employees = _active_employees(exclude_names=excluded_reviewees)
 
@@ -279,73 +294,265 @@ def build_required_pairs(roles=None):
 	for e in employees:
 		if e.department:
 			by_dept[e.department].append(e)
+	for members in by_dept.values():
+		members.sort(key=lambda employee: employee.name)
 
 	md = roles.get("md")
 	md_name = md["name"] if md else None
 	tl_by_dept = {t["department"]: t["employee"] for t in roles.get("team_leaders") or []}
+	nearness = frappe.get_all(
+		"Departmental Nearness Factor",
+		fields=["department", "department2", "factor"],
+	)
+	nearness_map = {(row.department, row.department2): flt(row.factor) for row in nearness}
+	return {
+		"settings": settings,
+		"employees": employees,
+		"employees_by_name": {employee.name: employee for employee in employees},
+		"by_dept": by_dept,
+		"excluded_reviewees": excluded_reviewees,
+		"excluded_reviewers": excluded_reviewers,
+		"md_name": md_name,
+		"tl_by_dept": tl_by_dept,
+		"nearness_map": nearness_map,
+	}
+
+
+def _weighted_department_slots(weights, count, seed):
+	"""Allocate exactly count slots using largest remainders; no forced one-per-link."""
+	count = max(0, cint(count))
+	positive = {department: flt(weight) for department, weight in weights.items() if flt(weight) > 0}
+	total_weight = sum(positive.values())
+	if not count or total_weight <= 0:
+		return []
+
+	quotas = {}
+	remainders = []
+	for department, weight in positive.items():
+		raw = (weight / total_weight) * count
+		whole = math.floor(raw)
+		quotas[department] = whole
+		remainders.append(
+			(raw - whole, weight, _stable_token(seed, department), department)
+		)
+	remaining = count - sum(quotas.values())
+	for _, _, _, department in sorted(remainders, key=lambda row: (-row[0], -row[1], row[2]))[:remaining]:
+		quotas[department] += 1
+
+	slots = [
+		(department, index)
+		for department, quota in quotas.items()
+		for index in range(quota)
+	]
+	slots.sort(key=lambda slot: _stable_token(seed, "slot", slot[0], slot[1]))
+	return [department for department, _ in slots]
+
+
+def _build_full_baseline_pairs(roles, cycle_key=None):
+	"""Build exhaustive organisation coverage while rotating departmental reviewers fairly."""
+	context = _pair_context(roles)
+	settings = context["settings"]
+	by_dept = context["by_dept"]
+	excluded_reviewers = context["excluded_reviewers"]
+	seed = cycle_key or FULL_BASELINE_STRATEGY
 
 	pairs = []
 	seen = set()
+	reviewer_load = defaultdict(int)
 
 	def add_pair(reviewer, reviewee, rule_type):
 		if not reviewer or not reviewee or reviewer == reviewee:
-			return
-		if reviewer in excluded_reviewers or reviewee in excluded_reviewees:
-			return
+			return False
+		if reviewer in excluded_reviewers or reviewee in context["excluded_reviewees"]:
+			return False
 		key = (reviewer, reviewee)
 		if key in seen:
-			return
+			return False
 		seen.add(key)
 		pairs.append({
 			"reviewer": reviewer,
 			"reviewee": reviewee,
 			"rule_type": rule_type,
 		})
+		reviewer_load[reviewer] += 1
+		return True
 
 	# Team Leader → each team member (before peers so rule_type is preserved)
-	for dept, tl in tl_by_dept.items():
+	for dept, tl in context["tl_by_dept"].items():
 		for m in by_dept.get(dept, []):
 			add_pair(tl, m.name, "TeamLeader")
 
 	# Team Leader → MD
-	if md_name:
-		for dept, tl in tl_by_dept.items():
-			add_pair(tl, md_name, "TL_to_MD")
+	if context["md_name"]:
+		for _, tl in context["tl_by_dept"].items():
+			add_pair(tl, context["md_name"], "TL_to_MD")
 
 	# Peers: every teammate surveys every other teammate
-	for dept, members in by_dept.items():
+	for _, members in by_dept.items():
 		names = [m.name for m in members]
 		for a in names:
 			for b in names:
 				if a != b:
 					add_pair(a, b, "Peer")
 
-	# Nearness externals (required when factor > 0)
-	nearness = frappe.get_all(
-		"Departmental Nearness Factor",
-		fields=["department", "department2", "factor"],
-	)
-	nearness_map = {(n.department, n.department2): flt(n.factor) for n in nearness}
-
+	# Every positive matrix link is represented in the baseline. Candidate choice is load-balanced.
 	max_per_employee = cint(settings.max_surveys_per_employee) or 10
 	for dept, members in by_dept.items():
 		other_depts = [d for d in by_dept.keys() if d != dept]
-		total_weight = sum(nearness_map.get((dept, od), 0) for od in other_depts)
+		total_weight = sum(context["nearness_map"].get((dept, od), 0) for od in other_depts)
 		if total_weight <= 0:
 			continue
-		# Aim ~40% external of target reviews per reviewee, at least 1 when nearness exists
 		external_needed = max(1, math.ceil(max_per_employee * 0.4))
 		for od in other_depts:
-			weight = nearness_map.get((dept, od), 0)
+			weight = context["nearness_map"].get((dept, od), 0)
 			if weight <= 0:
 				continue
 			quota = max(1, math.ceil((weight / total_weight) * external_needed))
 			candidates = [m.name for m in by_dept.get(od, []) if m.name not in excluded_reviewers]
 			for reviewee in members:
-				for reviewer in candidates[:quota]:
-					add_pair(reviewer, reviewee.name, "Nearness")
+				ordered = sorted(
+					candidates,
+					key=lambda reviewer: (
+						reviewer_load[reviewer],
+						_stable_token(seed, dept, od, reviewee.name, reviewer),
+					),
+				)
+				added = 0
+				for reviewer in ordered:
+					if add_pair(reviewer, reviewee.name, "Nearness"):
+						added += 1
+					if added >= quota:
+						break
 
 	return pairs
+
+
+def _build_balanced_pairs(roles, cycle_key=None):
+	"""Build a recurring cycle with target coverage, weighted nearness, and fair reviewer load."""
+	context = _pair_context(roles)
+	settings = context["settings"]
+	employees = context["employees"]
+	employees_by_name = context["employees_by_name"]
+	by_dept = context["by_dept"]
+	seed = cycle_key or BALANCED_STRATEGY
+	target = max(1, cint(getattr(settings, "balanced_reviews_per_employee", None)) or 6)
+	reviewer_cap = max(target, cint(getattr(settings, "balanced_max_surveys_per_reviewer", None)) or 10)
+	external_target = min(target, max(1, math.ceil(target * 0.4))) if target > 1 else 0
+	internal_target = target - external_target
+
+	pairs = []
+	seen = set()
+	reviewer_load = defaultdict(int)
+	reviewee_coverage = defaultdict(int)
+	internal_coverage = defaultdict(int)
+	external_coverage = defaultdict(int)
+
+	def add_pair(reviewer, reviewee, rule_type, mandatory=False):
+		if not reviewer or not reviewee or reviewer == reviewee:
+			return False
+		if reviewer in context["excluded_reviewers"] or reviewee in context["excluded_reviewees"]:
+			return False
+		if not mandatory and reviewer_load[reviewer] >= reviewer_cap:
+			return False
+		key = (reviewer, reviewee)
+		if key in seen:
+			return False
+		seen.add(key)
+		pairs.append({"reviewer": reviewer, "reviewee": reviewee, "rule_type": rule_type})
+		reviewer_load[reviewer] += 1
+		reviewee_coverage[reviewee] += 1
+		reviewer_department = (employees_by_name.get(reviewer) or frappe._dict()).get("department")
+		reviewee_department = (employees_by_name.get(reviewee) or frappe._dict()).get("department")
+		if reviewer_department and reviewer_department == reviewee_department:
+			internal_coverage[reviewee] += 1
+		else:
+			external_coverage[reviewee] += 1
+		return True
+
+	# Mandatory organisation constraints are always planned first.
+	for dept, team_leader in context["tl_by_dept"].items():
+		for member in by_dept.get(dept, []):
+			add_pair(team_leader, member.name, "TeamLeader", mandatory=True)
+	if context["md_name"]:
+		for _, team_leader in context["tl_by_dept"].items():
+			add_pair(team_leader, context["md_name"], "TL_to_MD", mandatory=True)
+
+	def choose_candidate(candidates, reviewee, salt):
+		eligible = [
+			candidate
+			for candidate in candidates
+			if candidate != reviewee
+			and candidate not in context["excluded_reviewers"]
+			and (candidate, reviewee) not in seen
+			and reviewer_load[candidate] < reviewer_cap
+		]
+		if not eligible:
+			return None
+		return min(
+			eligible,
+			key=lambda candidate: (
+				reviewer_load[candidate],
+				_stable_token(seed, salt, reviewee, candidate),
+			),
+		)
+
+	reviewees = [employee for employee in employees if employee.department]
+	reviewees.sort(key=lambda employee: _stable_token(seed, "reviewee", employee.name))
+	for reviewee in reviewees:
+		if reviewee_coverage[reviewee.name] >= target:
+			continue
+
+		internal_candidates = [member.name for member in by_dept.get(reviewee.department, [])]
+		internal_needed = max(0, internal_target - internal_coverage[reviewee.name])
+		while internal_needed > 0 and reviewee_coverage[reviewee.name] < target:
+			candidate = choose_candidate(internal_candidates, reviewee.name, "internal")
+			if not candidate:
+				break
+			if add_pair(candidate, reviewee.name, "Peer"):
+				internal_needed -= 1
+
+		external_needed = max(0, external_target - external_coverage[reviewee.name])
+		weights = {
+			department: context["nearness_map"].get((reviewee.department, department), 0)
+			for department in by_dept.keys()
+			if department != reviewee.department
+		}
+		for department in _weighted_department_slots(
+			weights,
+			external_needed,
+			f"{seed}|{reviewee.name}|external",
+		):
+			candidates = [member.name for member in by_dept.get(department, [])]
+			candidate = choose_candidate(candidates, reviewee.name, f"external|{department}")
+			if candidate:
+				add_pair(candidate, reviewee.name, "Nearness")
+
+		# Fill any capacity left using only valid peer or positive-nearness relationships.
+		valid_external = [
+			member.name
+			for department, members in by_dept.items()
+			if department != reviewee.department and flt(weights.get(department)) > 0
+			for member in members
+		]
+		fallback_candidates = internal_candidates + valid_external
+		while reviewee_coverage[reviewee.name] < target:
+			candidate = choose_candidate(fallback_candidates, reviewee.name, "fallback")
+			if not candidate:
+				break
+			candidate_department = employees_by_name[candidate].department
+			rule_type = "Peer" if candidate_department == reviewee.department else "Nearness"
+			add_pair(candidate, reviewee.name, rule_type)
+
+	return pairs
+
+
+def build_required_pairs(roles=None, strategy=None, cycle_key=None):
+	"""Return the planned pairs for the requested cycle strategy."""
+	roles = roles or resolve_org_roles()
+	strategy = _normalise_cycle_strategy(strategy)
+	if strategy == FULL_BASELINE_STRATEGY:
+		return _build_full_baseline_pairs(roles, cycle_key=cycle_key)
+	return _build_balanced_pairs(roles, cycle_key=cycle_key)
 
 
 def _reviewer_batch_quota(remaining, batches_left, min_per, cap):
@@ -366,19 +573,36 @@ def _reviewer_batch_quota(remaining, batches_left, min_per, cap):
 
 @frappe.whitelist()
 @survey_admin_required
-def preview_cycle_load():
+def preview_cycle_load(strategy=None):
 	"""Estimated load per reviewer for the planned matrix + batch size."""
 	settings = _settings()
 	roles = resolve_org_roles()
-	pairs = build_required_pairs(roles)
+	if strategy:
+		selected_strategy = _normalise_cycle_strategy(strategy)
+	else:
+		selected_strategy = frappe.db.get_value(
+			"Survey Cycle",
+			{"status": ["in", ["Open", "Generating", "Reporting"]]},
+			"generation_strategy",
+			order_by="period_start desc",
+		) or BALANCED_STRATEGY
+		selected_strategy = _normalise_cycle_strategy(selected_strategy)
 	survey_freq = settings.generation_frequency or "Weekly"
 	cycle = settings.completeness_cycle or "Quarterly"
+	period_start, period_end = _cycle_period(cycle)
+	pairs = build_required_pairs(
+		roles,
+		strategy=selected_strategy,
+		cycle_key=f"{period_start}|{period_end}|{selected_strategy}",
+	)
 
 	batches = _batches_in_cycle(survey_freq, cycle)
 	by_reviewer = defaultdict(int)
+	by_reviewee = defaultdict(int)
 	by_rule = defaultdict(int)
 	for p in pairs:
 		by_reviewer[p["reviewer"]] += 1
+		by_reviewee[p["reviewee"]] += 1
 		by_rule[p["rule_type"]] += 1
 
 	emp_names = {e.name: e.employee_name for e in _active_employees()}
@@ -386,6 +610,11 @@ def preview_cycle_load():
 	warnings = list(roles.get("warnings") or [])
 	cap = cint(settings.max_surveys_per_reviewer) or 10
 	min_per = cint(getattr(settings, "min_surveys_per_batch", None)) or 3
+	balanced_target = max(1, cint(getattr(settings, "balanced_reviews_per_employee", None)) or 6)
+	balanced_cycle_cap = max(
+		balanced_target,
+		cint(getattr(settings, "balanced_max_surveys_per_reviewer", None)) or 10,
+	)
 
 	for reviewer, count in sorted(by_reviewer.items(), key=lambda x: -x[1]):
 		even = math.ceil(count / batches) if batches else count
@@ -412,6 +641,30 @@ def preview_cycle_load():
 				f"(min {min_per}); early sends will front-load to the minimum."
 			)
 
+	if selected_strategy == BALANCED_STRATEGY:
+		excluded_reviewees, _ = _excluded_employees(settings)
+		under_target = [
+			employee
+			for employee in _active_employees(exclude_names=excluded_reviewees)
+			if employee.department and by_reviewee[employee.name] < balanced_target
+		]
+		if under_target:
+			warnings.append(
+				f"{len(under_target)} employee(s) could not reach the Balanced Coverage target of "
+				f"{balanced_target}. Add valid nearness links, eligible peers, or raise the reviewer cycle cap."
+			)
+		mandatory_over_cap = [
+			reviewer for reviewer, count in by_reviewer.items() if count > balanced_cycle_cap
+		]
+		if mandatory_over_cap:
+			warnings.append(
+				f"{len(mandatory_over_cap)} reviewer(s) exceed the per-cycle safety cap because mandatory "
+				"leadership assignments are preserved."
+			)
+
+	loads = list(by_reviewer.values())
+	coverages = list(by_reviewee.values())
+
 	return {
 		"roles": roles,
 		"total_pairs": len(pairs),
@@ -421,9 +674,162 @@ def preview_cycle_load():
 		"batches_in_cycle": batches,
 		"min_surveys_per_batch": min_per,
 		"max_surveys_per_reviewer": cap,
+		"balanced_reviews_per_employee": balanced_target,
+		"balanced_max_surveys_per_reviewer": balanced_cycle_cap,
+		"average_reviewer_load": round(len(pairs) / len(loads), 1) if loads else 0,
+		"minimum_reviewer_load": min(loads) if loads else 0,
+		"maximum_reviewer_load": max(loads) if loads else 0,
+		"minimum_reviews_received": min(coverages) if coverages else 0,
+		"maximum_reviews_received": max(coverages) if coverages else 0,
 		"load": load_rows[:100],
 		"warnings": warnings,
 		"generation_mode": getattr(settings, "generation_mode", None) or "Cycle Matrix",
+		"generation_strategy": selected_strategy,
+	}
+
+
+@frappe.whitelist()
+@survey_admin_required
+def preview_cycle_assignments(cycle=None):
+	"""Return the exact HR-only reviewer/reviewee plan without survey responses."""
+	roles = resolve_org_roles()
+	doc = None
+
+	if cycle:
+		if not frappe.db.exists("Survey Cycle", cycle):
+			frappe.throw("Survey Cycle not found")
+		doc = frappe.get_doc("Survey Cycle", cycle)
+	else:
+		open_cycle = frappe.db.get_value(
+			"Survey Cycle",
+			{"status": ["in", ["Open", "Generating", "Reporting"]]},
+			"name",
+			order_by="period_start desc",
+		)
+		if open_cycle:
+			doc = frappe.get_doc("Survey Cycle", open_cycle)
+
+	if doc:
+		selected_strategy = _normalise_cycle_strategy(doc.generation_strategy or BALANCED_STRATEGY)
+		pairs = [
+			{
+				"reviewer": p.reviewer,
+				"reviewee": p.reviewee,
+				"rule_type": p.rule_type,
+				"status": p.status or "Planned",
+				"batch_no": cint(p.batch_no),
+			}
+			for p in (doc.pairs or [])
+		]
+		source = "cycle"
+	else:
+		selected_strategy = BALANCED_STRATEGY
+		pairs = [
+			{
+				**p,
+				"status": "Planned",
+				"batch_no": 0,
+			}
+			for p in build_required_pairs(roles, strategy=selected_strategy)
+		]
+		source = "calculated"
+
+	employee_names = sorted(
+		{p.get("reviewer") for p in pairs if p.get("reviewer")}
+		| {p.get("reviewee") for p in pairs if p.get("reviewee")}
+	)
+	employee_rows = []
+	if employee_names:
+		employee_rows = frappe.get_all(
+			"Employee",
+			filters={"name": ["in", employee_names]},
+			fields=["name", "employee_name", "department"],
+		)
+	employees = {e.name: e for e in employee_rows}
+
+	reviewer_load = defaultdict(int)
+	reviewee_coverage = defaultdict(int)
+	by_rule = defaultdict(int)
+	rows = []
+	for pair in pairs:
+		reviewer = pair.get("reviewer")
+		reviewee = pair.get("reviewee")
+		reviewer_row = employees.get(reviewer) or frappe._dict()
+		reviewee_row = employees.get(reviewee) or frappe._dict()
+		reviewer_load[reviewer] += 1
+		reviewee_coverage[reviewee] += 1
+		by_rule[pair.get("rule_type") or "Other"] += 1
+		rows.append(
+			{
+				"reviewer": reviewer,
+				"reviewer_name": reviewer_row.get("employee_name") or reviewer,
+				"reviewer_department": reviewer_row.get("department") or "",
+				"reviewee": reviewee,
+				"reviewee_name": reviewee_row.get("employee_name") or reviewee,
+				"reviewee_department": reviewee_row.get("department") or "",
+				"rule_type": pair.get("rule_type") or "Other",
+				"status": pair.get("status") or "Planned",
+				"batch_no": cint(pair.get("batch_no")),
+			}
+		)
+
+	for row in rows:
+		row["reviewer_cycle_load"] = reviewer_load[row["reviewer"]]
+		row["reviewee_coverage"] = reviewee_coverage[row["reviewee"]]
+	rows.sort(
+		key=lambda row: (
+			(row.get("reviewer_name") or "").lower(),
+			(row.get("reviewee_name") or "").lower(),
+			row.get("rule_type") or "",
+		)
+	)
+
+	load_rows = [
+		{
+			"reviewer": reviewer,
+			"reviewer_name": (employees.get(reviewer) or frappe._dict()).get("employee_name") or reviewer,
+			"department": (employees.get(reviewer) or frappe._dict()).get("department") or "",
+			"required_surveys": count,
+		}
+		for reviewer, count in reviewer_load.items()
+	]
+	load_rows.sort(key=lambda row: (-row["required_surveys"], (row["reviewer_name"] or "").lower()))
+	loads = list(reviewer_load.values())
+	departments = sorted(
+		{
+			row[department_key]
+			for row in rows
+			for department_key in ("reviewer_department", "reviewee_department")
+			if row[department_key]
+		}
+	)
+
+	return {
+		"source": source,
+		"is_cycle_plan": source == "cycle",
+		"generation_strategy": selected_strategy,
+		"cycle": {
+			"name": doc.name,
+			"title": doc.title,
+			"status": doc.status,
+			"current_batch": cint(doc.current_batch),
+			"generation_strategy": selected_strategy,
+		} if doc else None,
+		"summary": {
+			"total_pairs": len(rows),
+			"reviewers": len(reviewer_load),
+			"reviewees": len(reviewee_coverage),
+			"average_load": round(len(rows) / len(reviewer_load), 1) if reviewer_load else 0,
+			"minimum_load": min(loads) if loads else 0,
+			"maximum_load": max(loads) if loads else 0,
+		},
+		"by_rule": dict(by_rule),
+		"departments": departments,
+		"rules": sorted(by_rule.keys()),
+		"statuses": sorted({row["status"] for row in rows}),
+		"load": load_rows,
+		"rows": rows,
+		"warnings": list(roles.get("warnings") or []),
 	}
 
 
@@ -477,7 +883,18 @@ def _cycle_period(completeness_cycle, as_of=None):
 # Cycle document lifecycle
 # ---------------------------------------------------------------------------
 
-def get_or_create_open_cycle(force_rebuild=False):
+def _cycle_strategy_locked(doc):
+	return bool(
+		cint(doc.current_batch)
+		or cint(doc.assigned_pairs)
+		or any(
+			pair.status != "Planned" or pair.survey
+			for pair in (doc.pairs or [])
+		)
+	)
+
+
+def get_or_create_open_cycle(force_rebuild=False, strategy=None):
 	settings = _settings()
 	start, end = _cycle_period(settings.completeness_cycle or "Quarterly")
 	existing = frappe.db.get_value(
@@ -485,20 +902,30 @@ def get_or_create_open_cycle(force_rebuild=False):
 		{"period_start": start, "period_end": end, "status": ["in", ["Open", "Generating", "Reporting"]]},
 		"name",
 	)
-	if existing and not force_rebuild:
-		return frappe.get_doc("Survey Cycle", existing)
+	existing_doc = frappe.get_doc("Survey Cycle", existing) if existing else None
+	if existing_doc and not force_rebuild:
+		return existing_doc
 
-	if existing and force_rebuild:
-		frappe.delete_doc("Survey Cycle", existing, ignore_permissions=True, force=1)
+	if existing_doc and force_rebuild:
+		if _cycle_strategy_locked(existing_doc):
+			frappe.throw("The cycle plan cannot be rebuilt after survey generation has started.")
+		strategy = strategy or existing_doc.generation_strategy or BALANCED_STRATEGY
+		frappe.delete_doc("Survey Cycle", existing_doc.name, ignore_permissions=True, force=1)
 
+	strategy = _normalise_cycle_strategy(strategy)
 	roles = resolve_org_roles()
-	pairs = build_required_pairs(roles)
+	pairs = build_required_pairs(
+		roles,
+		strategy=strategy,
+		cycle_key=f"{start}|{end}|{strategy}",
+	)
 	title = f"Cycle {start} → {end}"
 
 	doc = frappe.get_doc({
 		"doctype": "Survey Cycle",
 		"title": title,
 		"status": "Open",
+		"generation_strategy": strategy,
 		"period_start": start,
 		"period_end": end,
 		"survey_frequency": settings.generation_frequency or "Weekly",
@@ -527,9 +954,52 @@ def get_or_create_open_cycle(force_rebuild=False):
 
 @frappe.whitelist()
 @survey_admin_required
-def ensure_cycle(force_rebuild=0):
-	doc = get_or_create_open_cycle(force_rebuild=cint(force_rebuild))
+def ensure_cycle(force_rebuild=0, strategy=None):
+	doc = get_or_create_open_cycle(
+		force_rebuild=cint(force_rebuild),
+		strategy=strategy or None,
+	)
 	refresh_cycle_stats(doc)
+	return cycle_summary(doc)
+
+
+@frappe.whitelist()
+@survey_admin_required
+def set_cycle_strategy(strategy):
+	"""Select and rebuild an unstarted cycle plan; new cycles still default to Balanced."""
+	strategy = _normalise_cycle_strategy(strategy)
+	doc = get_or_create_open_cycle(strategy=strategy)
+	if _cycle_strategy_locked(doc):
+		frappe.throw("The cycle strategy is locked because survey generation has already started.")
+	if (doc.generation_strategy or BALANCED_STRATEGY) == strategy and doc.pairs:
+		return cycle_summary(doc)
+
+	roles = resolve_org_roles()
+	pairs = build_required_pairs(
+		roles,
+		strategy=strategy,
+		cycle_key=f"{doc.period_start}|{doc.period_end}|{strategy}",
+	)
+	doc.generation_strategy = strategy
+	doc.set("pairs", [])
+	for pair in pairs:
+		doc.append(
+			"pairs",
+			{
+				"reviewer": pair["reviewer"],
+				"reviewee": pair["reviewee"],
+				"rule_type": pair["rule_type"],
+				"batch_no": 0,
+				"status": "Planned",
+			},
+		)
+	doc.total_pairs = len(pairs)
+	doc.assigned_pairs = 0
+	doc.completed_pairs = 0
+	doc.completion_pct = 0
+	doc.current_batch = 0
+	doc.save(ignore_permissions=True)
+	frappe.db.commit()
 	return cycle_summary(doc)
 
 
@@ -547,6 +1017,8 @@ def cycle_summary(doc=None):
 		"name": doc.name,
 		"title": doc.title,
 		"status": doc.status,
+		"generation_strategy": _normalise_cycle_strategy(doc.generation_strategy or BALANCED_STRATEGY),
+		"strategy_locked": _cycle_strategy_locked(doc),
 		"period_start": str(doc.period_start),
 		"period_end": str(doc.period_end),
 		"survey_frequency": doc.survey_frequency,

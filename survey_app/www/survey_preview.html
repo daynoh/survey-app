@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>360° Reviewer Preview</title>
+    <script src="/assets/frappe/js/lib/jquery/jquery.min.js"></script>
+    <script src="/assets/survey_app/js/survey.jquery.min.js"></script>
+    <link rel="stylesheet" href="/assets/survey_app/css/survey.min.css">
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: #f3f5f7;
+            color: #1f272e;
+        }
+        .preview-banner {
+            position: sticky;
+            top: 0;
+            z-index: 30;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 12px 24px;
+            background: #151515;
+            border-bottom: 4px solid #86bc25;
+            color: #fff;
+            box-shadow: 0 4px 18px rgba(0, 0, 0, 0.16);
+        }
+        .preview-banner strong { font-size: 15px; }
+        .preview-banner span { color: #d8dde1; font-size: 13px; }
+        .preview-badge {
+            flex: 0 0 auto;
+            padding: 5px 10px;
+            border: 1px solid #86bc25;
+            border-radius: 999px;
+            color: #b7dc72;
+            font-size: 11px;
+            font-weight: 700;
+            letter-spacing: .08em;
+            text-transform: uppercase;
+        }
+        .preview-shell { max-width: 1080px; margin: 0 auto; padding: 24px 18px 56px; }
+        .preview-meta {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px 18px;
+            margin-bottom: 14px;
+            padding: 12px 16px;
+            border: 1px solid #d7dde2;
+            border-radius: 8px;
+            background: #fff;
+            color: #5a6772;
+            font-size: 13px;
+        }
+        #surveyElement { min-height: 520px; }
+        .preview-state {
+            margin: 70px auto;
+            max-width: 680px;
+            padding: 36px;
+            border: 1px solid #d7dde2;
+            border-radius: 10px;
+            background: #fff;
+            text-align: center;
+            box-shadow: 0 12px 36px rgba(31, 39, 46, .08);
+        }
+        .preview-state h2 { margin: 0 0 10px; }
+        .preview-state p { margin: 0; color: #66727c; }
+        .preview-restart {
+            margin-top: 20px;
+            padding: 10px 18px;
+            border: 0;
+            border-radius: 5px;
+            background: #86bc25;
+            color: #111;
+            font-weight: 700;
+            cursor: pointer;
+        }
+        @media (max-width: 640px) {
+            .preview-banner { align-items: flex-start; padding: 11px 14px; }
+            .preview-banner span { display: block; margin-top: 3px; }
+            .preview-shell { padding: 14px 8px 36px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="preview-banner">
+        <div>
+            <strong>360° Reviewer Experience</strong>
+            <span>This is a safe preview. Nothing entered here will be saved or submitted.</span>
+        </div>
+        <div class="preview-badge">HR Preview</div>
+    </div>
+    <main class="preview-shell">
+        <div class="preview-meta" id="previewMeta" style="display:none;"></div>
+        <div id="surveyElement"><div class="preview-state">Loading reviewer preview…</div></div>
+    </main>
+
+    <script>
+        $(function () {
+            var reviewee = new URLSearchParams(window.location.search).get('reviewee') || '';
+            var endpoint = '/api/method/survey_app.survey_config.preview_reviewer_survey';
+            if (reviewee) endpoint += '?reviewee=' + encodeURIComponent(reviewee);
+
+            function safe(value) {
+                return $('<div>').text(value == null ? '' : String(value)).html();
+            }
+
+            function showError(message) {
+                $('#surveyElement').html(
+                    '<div class="preview-state"><h2>Preview unavailable</h2><p>' + safe(message) + '</p></div>'
+                );
+            }
+
+            if (typeof Survey === 'undefined' || !$.fn.Survey) {
+                showError('The survey renderer could not be loaded.');
+                return;
+            }
+
+            fetch(endpoint, { credentials: 'same-origin' })
+                .then(function (response) {
+                    return response.json().then(function (payload) {
+                        if (!response.ok || payload.exc_type) throw new Error('You are not permitted to open this preview.');
+                        return payload;
+                    });
+                })
+                .then(function (payload) {
+                    var data = payload.message;
+                    if (!data || !data.survey_json) throw new Error('No survey configuration is available.');
+
+                    var employee = data.reviewee || {};
+                    $('#previewMeta').html(
+                        '<span><b>Reviewee:</b> ' + safe(employee.employee_name || employee.name) + '</span>' +
+                        '<span><b>Department:</b> ' + safe(employee.department || '—') + '</span>' +
+                        '<span><b>Categories:</b> ' + Number(data.category_count || 0) + '</span>' +
+                        '<span><b>Questions:</b> ' + Number(data.question_count || 0) + '</span>'
+                    ).show();
+
+                    var survey = new Survey.Model(data.survey_json);
+                    survey.applyTheme({
+                        cssVariables: {
+                            '--sjs-primary-backcolor': '#1f272e',
+                            '--sjs-primary-backcolor-light': 'rgba(134, 188, 37, .14)'
+                        }
+                    });
+                    survey.onComplete.add(function () {
+                        $('#surveyElement').html(
+                            '<div class="preview-state"><h2>Preview complete</h2>' +
+                            '<p>No answers were saved and no survey response was created.</p>' +
+                            '<button class="preview-restart" type="button">Restart preview</button></div>'
+                        );
+                        $('.preview-restart').on('click', function () { window.location.reload(); });
+                    });
+                    $('#surveyElement').empty().Survey({ model: survey });
+                })
+                .catch(function (error) {
+                    showError(error.message || 'The preview could not be loaded.');
+                });
+        });
+    </script>
+</body>
+</html>

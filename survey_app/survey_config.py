@@ -1,7 +1,9 @@
 import frappe
+from html import escape
 from frappe.utils import now
 
 from survey_app.permissions import survey_admin_required
+from survey_app.surveys import sample_360_question_sections
 
 
 @frappe.whitelist()
@@ -36,6 +38,8 @@ def get_config_data():
         doc = frappe.get_doc("Value Scoring Settings", "Value Scoring Settings")
         settings = {
             "questions_per_category": doc.questions_per_category,
+            "balanced_reviews_per_employee": getattr(doc, "balanced_reviews_per_employee", None) or 6,
+            "balanced_max_surveys_per_reviewer": getattr(doc, "balanced_max_surveys_per_reviewer", None) or 10,
             "max_surveys_per_employee": doc.max_surveys_per_employee,
             "min_surveys_per_batch": getattr(doc, "min_surveys_per_batch", None) or 3,
             "max_surveys_per_reviewer": doc.max_surveys_per_reviewer,
@@ -265,6 +269,10 @@ def save_scoring_settings(settings_data):
         doc = frappe.get_doc("Value Scoring Settings", "Value Scoring Settings")
 
     doc.questions_per_category = settings_data.get("questions_per_category") or 3
+    balanced_target = max(1, cint_safe(settings_data.get("balanced_reviews_per_employee"), 6))
+    balanced_cap = max(balanced_target, cint_safe(settings_data.get("balanced_max_surveys_per_reviewer"), 10))
+    doc.balanced_reviews_per_employee = balanced_target
+    doc.balanced_max_surveys_per_reviewer = balanced_cap
     doc.max_surveys_per_employee = settings_data.get("max_surveys_per_employee") or 10
     if "min_surveys_per_batch" in settings_data:
         doc.min_surveys_per_batch = settings_data.get("min_surveys_per_batch") or 3
@@ -366,6 +374,113 @@ def preview_surveys():
         },
         "by_department": by_department,
         "nearness_factors_count": len(nearness_records)
+    }
+
+
+@frappe.whitelist()
+@survey_admin_required
+def preview_reviewer_survey(reviewee=None):
+    """Build a non-persistent 360° SurveyJS payload for HR preview."""
+    employee = None
+    if reviewee:
+        employee = frappe.db.get_value(
+            "Employee",
+            {"name": reviewee, "status": "Active"},
+            ["name", "employee_name", "department"],
+            as_dict=True,
+        )
+    else:
+        employees = frappe.get_all(
+            "Employee",
+            filters={"status": "Active"},
+            fields=["name", "employee_name", "department"],
+            order_by="employee_name asc",
+            limit=1,
+        )
+        employee = employees[0] if employees else None
+
+    if not employee:
+        frappe.throw("Select an active employee to preview the reviewer experience.")
+
+    sections = sample_360_question_sections()
+    employee_name = employee.employee_name or employee.name
+    safe_employee_name = escape(employee_name)
+    pages = [
+        {
+            "name": "page_0",
+            "elements": [
+                {
+                    "type": "html",
+                    "name": "intro_html",
+                    "html": (
+                        '<div class="survey-welcome-hero">'
+                        f'<h1 class="survey-title">Staff 360° Review for {safe_employee_name}</h1>'
+                        '<div class="survey-subtitle">Confidential reviewer experience preview</div>'
+                        '</div>'
+                    ),
+                }
+            ],
+        }
+    ]
+
+    scale = [
+        (1, "Poor"),
+        (2, "Below Expectation"),
+        (3, "Good"),
+        (4, "Very Good"),
+        (5, "Excellent"),
+    ]
+    question_count = 0
+    for page_number, section in enumerate(sections, start=1):
+        category = section["category"]
+        category_key = frappe.scrub(category) or f"category_{page_number}"
+        questions = section["questions"]
+        question_count += len(questions)
+        pages.append(
+            {
+                "name": f"page_{page_number}",
+                "elements": [
+                    {
+                        "name": f"preview_{category_key}",
+                        "type": "matrix",
+                        "title": f"Core Competency Assessment: {category}",
+                        "description": (
+                            f"Please rate {employee_name}'s performance regarding {category} "
+                            "on a scale of 1 to 5."
+                        ),
+                        "isRequired": True,
+                        "rows": [
+                            {
+                                "value": f"preview_{category_key}_row_{index}",
+                                "text": question,
+                            }
+                            for index, question in enumerate(questions, start=1)
+                        ],
+                        "columns": [
+                            {"value": f"preview_col_{score}", "text": label}
+                            for score, label in scale
+                        ],
+                    }
+                ],
+            }
+        )
+
+    return {
+        "reviewee": {
+            "name": employee.name,
+            "employee_name": employee_name,
+            "department": employee.department or "",
+        },
+        "category_count": len(sections),
+        "question_count": question_count,
+        "survey_json": {
+            "showProgressBar": "bottom",
+            "firstPageIsStarted": True,
+            "startSurveyText": "Start Preview",
+            "completeText": "Finish Preview",
+            "pages": pages,
+        },
+        "preview_only": True,
     }
 
 

@@ -5,3 +5,4 @@
 [post_model_sync]
 # Patches added in this section will be executed after doctypes are migrated
 survey_app.patches.expand_value_questions_pool
+survey_app.patches.mark_existing_cycles_as_full_baseline

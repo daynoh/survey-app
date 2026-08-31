@@ -438,11 +438,34 @@ def create_survey_log(reviewer, reviewee):
     print(f"Reviewer: {reviewer_name} ({reviewer}) -> Reviewing: {reviewee_name} ({reviewee})")
 
 
-
-def create_survey_and_send_invitation(sender_employee, receiver_employee):
+def sample_360_question_sections():
+    """Sample the category question sets shared by generation and HR preview."""
     settings = frappe.get_doc("Value Scoring Settings")
     questions_per_cat = settings.questions_per_category or 5
     categories = frappe.get_all("Value Performance Categories", pluck="name")
+    sections = []
+
+    for category in categories:
+        pool = frappe.get_all(
+            "Value Questions",
+            filters={"category": category},
+            fields=["question"],
+        )
+        sample_size = min(len(pool), questions_per_cat)
+        selected = random.sample(pool, sample_size) if pool else []
+        if not selected:
+            continue
+        sections.append({
+            "category": category,
+            "questions": [question["question"] for question in selected],
+        })
+
+    return sections
+
+
+
+def create_survey_and_send_invitation(sender_employee, receiver_employee):
+    sections = sample_360_question_sections()
 
     receiver_name = frappe.db.get_value("Employee", receiver_employee, "employee_name")
     reviewer_name = frappe.db.get_value("Employee", sender_employee, "employee_name")
@@ -461,12 +484,9 @@ def create_survey_and_send_invitation(sender_employee, receiver_employee):
     selected_questions_map = {}
     page_counter = count(1)
     # Append Survey Questions to the parent (just the skeleton)
-    for cat in categories:
-        pool = frappe.get_all("Value Questions", filters={"category": cat}, fields=["question"])
-        sample_size = min(len(pool), questions_per_cat)
-        questions = random.sample(pool, sample_size) if pool else []
-        if not questions:
-            continue
+    for section in sections:
+        cat = section["category"]
+        questions = section["questions"]
 
         survey_doc.append("questions", {
             "question_name": frappe.scrub(cat),
@@ -518,10 +538,10 @@ def create_survey_and_send_invitation(sender_employee, receiver_employee):
             })
 
         # Add rows (Value Questions)
-        for q in questions:
+        for question in questions:
             sq_doc.append("options", {
-                "option_value": frappe.scrub(q["question"]),
-                "option_label": q["question"],
+                "option_value": frappe.scrub(question),
+                "option_label": question,
                 "dimension_type": "row"
             })
 

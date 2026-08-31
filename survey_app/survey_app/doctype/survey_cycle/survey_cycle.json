@@ -9,6 +9,7 @@
   "naming_series",
   "title",
   "status",
+  "generation_strategy",
   "column_break_meta",
   "period_start",
   "period_end",
@@ -51,6 +52,16 @@
    "in_standard_filter": 1,
    "label": "Status",
    "options": "Open\nGenerating\nReporting\nClosed"
+  },
+  {
+   "default": "Balanced Coverage",
+   "description": "Balanced Coverage is the normal recurring strategy. Full Baseline Matrix is an explicit one-cycle organisation-wide baseline.",
+   "fieldname": "generation_strategy",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "label": "Generation Strategy",
+   "options": "Balanced Coverage\nFull Baseline Matrix",
+   "read_only": 1
   },
   {
    "fieldname": "column_break_meta",

@@ -7,6 +7,8 @@
  "field_order": [
   "questions_per_category",
   "excluded_departments",
+  "balanced_reviews_per_employee",
+  "balanced_max_surveys_per_reviewer",
   "max_surveys_per_employee",
   "min_surveys_per_batch",
   "max_surveys_per_reviewer",
@@ -42,9 +44,24 @@
    "options": "Department Multiselect"
   },
   {
+   "default": "6",
+   "description": "How many aggregate reviews each employee should receive in a normal Balanced Coverage cycle. Leadership assignments count toward this target.",
+   "fieldname": "balanced_reviews_per_employee",
+   "fieldtype": "Int",
+   "label": "Balanced Reviews Received per Employee"
+  },
+  {
+   "default": "10",
+   "description": "Safety cap on a reviewer's total assignments across a normal Balanced Coverage cycle. Mandatory leadership assignments are preserved and may exceed this cap with a preview warning.",
+   "fieldname": "balanced_max_surveys_per_reviewer",
+   "fieldtype": "Int",
+   "label": "Balanced Maximum Surveys per Reviewer (per cycle)"
+  },
+  {
+   "description": "Used only by Legacy Capped generation and as the external-coverage basis for Full Baseline Matrix cycles.",
    "fieldname": "max_surveys_per_employee",
    "fieldtype": "Int",
-   "label": "Maximum Surveys per Employee"
+   "label": "Legacy / Baseline Review Target"
   },
   {
    "fieldname": "questions_per_category",

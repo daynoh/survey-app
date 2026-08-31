@@ -66,7 +66,8 @@ web_include_js = [
 # ----------
 
 website_route_rules = [
-    {"from_route": "/survey/<survey_name>", "to_route": "survey"}
+    {"from_route": "/survey/<survey_name>", "to_route": "survey"},
+    {"from_route": "/survey-preview", "to_route": "survey_preview"},
 ]
 
 
@@ -238,4 +239,3 @@ scheduler_events = {
 # default_log_clearing_doctypes = {
 #	"Logging DocType Name": 30  # days to retain logs
 # }
-

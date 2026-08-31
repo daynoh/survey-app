@@ -249,20 +249,25 @@ Local example site from development: `erp.localhost` on port `8001`. That site�
 1. Open **Survey Setup → Roles & Org**
    - Set **Managing Director**
    - Add **Team Leaders** per department (or rely on Hybrid org/role fallback)
-   - Use **Preview Resolved Roster** and **Preview Cycle Load**
+   - Use **Preview Resolved Roster**, **Preview Cycle Load**, and **Who Reviews Who**
 2. Open **Survey Setup → Automation**
    - Generation mode: **Cycle Matrix** (recommended) or Legacy Capped
+   - Cycle strategy defaults to **Balanced Coverage**. For an intentional first-cycle organisation baseline, select **Full Baseline Matrix**, review the workload preview, and click **Apply to This Cycle** before any batch is generated.
    - Choose **Survey Frequency** (e.g. Weekly) and **Completeness Cycle** (e.g. Quarterly)
    - Optionally enable **Automatic Individual Reports** + **Report Frequency** (e.g. Monthly)
    - **Build / Refresh Cycle**, then **Run Survey Batch Now** to smoke-test
-3. **Value Performance Categories** / **Value Questions** — survey content
-4. **Departmental Nearness Factor** — cross-department required reviewers
-5. Confirm **Email** / email queue works (invites, reminders, reports)
-6. Scheduler must be running so survey batches + report jobs can fire (`*/5` cron)
+3. Open **Survey Setup → Generate Surveys**, select an active employee, and use **Preview Reviewer Experience** to test the current sampled 360° form without saving a response.
+4. **Value Performance Categories** / **Value Questions** — survey content
+5. **Departmental Nearness Factor** — cross-department required reviewers
+6. Confirm **Email** / email queue works (invites, reminders, reports)
+7. Scheduler must be running so survey batches + report jobs can fire (`*/5` cron)
 
 ### How Cycle Matrix load math works
 
-- Builds required pairs: Team Leader→team, peers in department, Team Leaders→MD, nearness externals
+- **Balanced Coverage** is the recurring default. It preserves Team Leader→team and Team Leader→MD constraints, targets a configurable number of reviews received per employee, allocates internal/external coverage using the nearness weights, and selects the least-loaded eligible reviewers up to the configured per-cycle safety cap.
+- **Full Baseline Matrix** is a deliberate first-cycle option. It retains comprehensive peer and weighted-nearness coverage and can therefore create a substantially heavier workload.
+- Survey Setup previews total pairs plus average/minimum/maximum reviewer load before HR applies a strategy. The strategy can be changed only before the first assignment or batch is generated.
+- New cycles automatically return to **Balanced Coverage**; choosing Full Baseline Matrix does not become a permanent default.
 - Spreads unassigned pairs across remaining batches in the completeness cycle
 - Reports at the chosen report frequency: **Final** if cycle completion ≥ threshold, else **Progress** (+ reminders)
 
