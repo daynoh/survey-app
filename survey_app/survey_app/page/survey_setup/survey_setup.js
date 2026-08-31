@@ -624,8 +624,22 @@ survey_app.SurveySetup = class SurveySetup {
 			var d = new frappe.ui.Dialog({
 				title: __('Add Nearness Factor'),
 				fields: [
-					{ label: __('Department'), fieldname: 'dept1', fieldtype: 'Link', options: 'Department', reqd: 1 },
-					{ label: __('Related Department'), fieldname: 'dept2', fieldtype: 'Link', options: 'Department', reqd: 1 },
+					{
+						label: __('Department'),
+						fieldname: 'dept1',
+						fieldtype: 'Link',
+						options: 'Department',
+						reqd: 1,
+						get_query: function() { return { filters: { disabled: 0 } }; }
+					},
+					{
+						label: __('Related Department'),
+						fieldname: 'dept2',
+						fieldtype: 'Link',
+						options: 'Department',
+						reqd: 1,
+						get_query: function() { return { filters: { disabled: 0 } }; }
+					},
 					{
 						label: __('Factor'),
 						fieldname: 'factor',
@@ -912,6 +926,10 @@ survey_app.SurveySetup = class SurveySetup {
 						frappe.utils.escape_html(r.team_leader_name || '') + '" title="' +
 						frappe.utils.escape_html(__('Remove manual Team Leader')) + '"><i class="fa fa-trash"></i></button>';
 				}
+			} else {
+				actions += '<button class="btn btn-xs btn-default roster-tl-add" data-dept="' +
+					frappe.utils.escape_html(r.department || '') + '" title="' +
+					frappe.utils.escape_html(__('Add Team Leader')) + '"><i class="fa fa-plus"></i></button>';
 			}
 			html += '<tr><td>' + frappe.utils.escape_html(r.department || '') + '</td><td>' +
 				frappe.utils.escape_html(r.team_leader_name || '—') + '</td><td>' +
@@ -926,30 +944,15 @@ survey_app.SurveySetup = class SurveySetup {
 		this.tab_roles.find('#roles-preview').html(html);
 
 		this.tab_roles.find('.roster-tl-change').on('click', function () {
-			var dept = $(this).data('dept');
-			var current = $(this).data('employee') || '';
-			var current_name = $(this).data('name') || '';
-			var change_dialog = new frappe.ui.Dialog({
-				title: __('Change Team Leader — {0}', [dept]),
-				fields: [
-					{ fieldtype: 'Link', fieldname: 'employee', options: 'Employee', label: __('Team Leader'), reqd: 1, default: current },
-					{ fieldtype: 'HTML', fieldname: 'tl_hint',
-						options: '<p class="text-muted small">' + __('Current: {0}', [current_name || '—']) + '</p>' }
-				],
-				primary_action_label: __('Save'),
-				primary_action: function () {
-					var employee = change_dialog.get_value('employee');
-					if (!employee) return;
-					me._collect_tl_rows();
-					me._team_leader_rows = me._team_leader_rows.filter(function (r) { return r.department !== dept; });
-					me._team_leader_rows.push({ department: dept, employee: employee, employee_name: '' });
-					change_dialog.hide();
-					me._save_team_leaders(function () {
-						me.tab_roles.find('#preview-roles-btn').trigger('click');
-					});
-				}
-			});
-			change_dialog.show();
+			me._open_tl_picker(
+				$(this).data('dept'),
+				$(this).data('employee') || '',
+				$(this).data('name') || ''
+			);
+		});
+
+		this.tab_roles.find('.roster-tl-add').on('click', function () {
+			me._open_tl_picker($(this).data('dept'), '', '');
 		});
 
 		this.tab_roles.find('.roster-tl-remove').on('click', function () {
@@ -969,6 +972,33 @@ survey_app.SurveySetup = class SurveySetup {
 				}
 			);
 		});
+	}
+
+	_open_tl_picker(dept, current, current_name) {
+		var me = this;
+		var change_dialog = new frappe.ui.Dialog({
+			title: __('Team Leader — {0}', [dept]),
+			fields: [
+				{ fieldtype: 'Link', fieldname: 'employee', options: 'Employee', label: __('Team Leader'), reqd: 1, default: current },
+				{ fieldtype: 'HTML', fieldname: 'tl_hint',
+					options: '<p class="text-muted small">' + (current_name
+						? __('Current: {0}', [current_name])
+						: __('No team leader is set for this department yet.')) + '</p>' }
+			],
+			primary_action_label: __('Save'),
+			primary_action: function () {
+				var employee = change_dialog.get_value('employee');
+				if (!employee) return;
+				me._collect_tl_rows();
+				me._team_leader_rows = me._team_leader_rows.filter(function (r) { return r.department !== dept; });
+				me._team_leader_rows.push({ department: dept, employee: employee, employee_name: '' });
+				change_dialog.hide();
+				me._save_team_leaders(function () {
+					me.tab_roles.find('#preview-roles-btn').trigger('click');
+				});
+			}
+		});
+		change_dialog.show();
 	}
 
 	_show_load_preview(data) {

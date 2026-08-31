@@ -150,6 +150,20 @@ def save_nearness_factor(department, department2, factor):
     factor = float(factor)
     if factor < 0:
         frappe.throw("Factor must be a positive number")
+    if department == department2:
+        frappe.throw("Departments must be different")
+
+    disabled = frappe.get_all(
+        "Department",
+        filters={"name": ["in", [department, department2]], "disabled": 1},
+        pluck="name",
+    )
+    if disabled:
+        frappe.throw(
+            "Disabled departments cannot be used in nearness factors: {0}".format(
+                ", ".join(sorted(disabled))
+            )
+        )
 
     existing = frappe.db.exists(
         "Departmental Nearness Factor",
