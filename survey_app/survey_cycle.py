@@ -66,6 +66,40 @@ def _excluded_employees(settings):
 	return excluded_reviewees, excluded_reviewers
 
 
+def _exco_oversight(settings):
+	"""Map EXCO member -> list of departments they oversee, from settings rows."""
+	exco_map = defaultdict(list)
+	for row in getattr(settings, "exco_oversight", None) or []:
+		employee = getattr(row, "employee", None)
+		department = getattr(row, "department", None)
+		if employee and department and department not in exco_map[employee]:
+			exco_map[employee].append(department)
+	return dict(exco_map)
+
+
+def _exco_violation(exco_map, exco_employees, md_name, dept_by_employee, reviewer, reviewee):
+	"""True when a pair breaks the EXCO circle.
+
+	Circle: an EXCO member only reviews, and is only reviewed by, members of the
+	department(s) they oversee, other EXCO members, and the MD. Exclusions are
+	enforced separately and always take precedence over the circle.
+	"""
+	if reviewer not in exco_employees and reviewee not in exco_employees:
+		return False
+	if reviewer in exco_employees and reviewee in exco_employees:
+		return False
+
+	def _outside_circle(exco_member, other):
+		if other == md_name:
+			return False
+		departments = exco_map.get(exco_member) or []
+		return dept_by_employee.get(other) not in departments
+
+	if reviewer in exco_employees:
+		return _outside_circle(reviewer, reviewee)
+	return _outside_circle(reviewee, reviewer)
+
+
 # ---------------------------------------------------------------------------
 # Role resolution
 # ---------------------------------------------------------------------------
@@ -305,6 +339,16 @@ def _pair_context(roles):
 		fields=["department", "department2", "factor"],
 	)
 	nearness_map = {(row.department, row.department2): flt(row.factor) for row in nearness}
+
+	exco_map = _exco_oversight(settings)
+	exco_employees = {name for name in exco_map if name in employees_by_name}
+	dept_by_employee = {e.name: e.department for e in employees}
+
+	def exco_pair_allowed(reviewer, reviewee):
+		return not _exco_violation(
+			exco_map, exco_employees, md_name, dept_by_employee, reviewer, reviewee
+		)
+
 	return {
 		"settings": settings,
 		"employees": employees,
@@ -315,6 +359,9 @@ def _pair_context(roles):
 		"md_name": md_name,
 		"tl_by_dept": tl_by_dept,
 		"nearness_map": nearness_map,
+		"exco_map": exco_map,
+		"exco_employees": exco_employees,
+		"exco_pair_allowed": exco_pair_allowed,
 	}
 
 
@@ -365,6 +412,8 @@ def _build_full_baseline_pairs(roles, cycle_key=None):
 			return False
 		if reviewer in excluded_reviewers or reviewee in context["excluded_reviewees"]:
 			return False
+		if not context["exco_pair_allowed"](reviewer, reviewee):
+			return False
 		key = (reviewer, reviewee)
 		if key in seen:
 			return False
@@ -387,9 +436,24 @@ def _build_full_baseline_pairs(roles, cycle_key=None):
 		for _, tl in context["tl_by_dept"].items():
 			add_pair(tl, context["md_name"], "TL_to_MD")
 
-	# Peers: every teammate surveys every other teammate
+	# EXCO oversight circle: supervised team both ways, EXCO peers, and the MD.
+	for exco_member, departments in context["exco_map"].items():
+		if exco_member not in context["employees_by_name"]:
+			continue
+		for department in departments:
+			for m in by_dept.get(department, []):
+				add_pair(exco_member, m.name, "Exco Oversight")
+				add_pair(m.name, exco_member, "Exco Oversight")
+		for other_exco in context["exco_employees"]:
+			if other_exco != exco_member:
+				add_pair(exco_member, other_exco, "Exco Peer")
+		if context["md_name"]:
+			add_pair(exco_member, context["md_name"], "Exco to MD")
+
+	# Peers: every teammate surveys every other teammate (EXCO handled above)
+	exco_employees = context["exco_employees"]
 	for _, members in by_dept.items():
-		names = [m.name for m in members]
+		names = [m.name for m in members if m.name not in exco_employees]
 		for a in names:
 			for b in names:
 				if a != b:
@@ -408,8 +472,14 @@ def _build_full_baseline_pairs(roles, cycle_key=None):
 			if weight <= 0:
 				continue
 			quota = max(1, math.ceil((weight / total_weight) * external_needed))
-			candidates = [m.name for m in by_dept.get(od, []) if m.name not in excluded_reviewers]
+			candidates = [
+				m.name
+				for m in by_dept.get(od, [])
+				if m.name not in excluded_reviewers and m.name not in exco_employees
+			]
 			for reviewee in members:
+				if reviewee.name in exco_employees:
+					continue
 				ordered = sorted(
 					candidates,
 					key=lambda reviewer: (
@@ -452,6 +522,8 @@ def _build_balanced_pairs(roles, cycle_key=None):
 			return False
 		if reviewer in context["excluded_reviewers"] or reviewee in context["excluded_reviewees"]:
 			return False
+		if not context["exco_pair_allowed"](reviewer, reviewee):
+			return False
 		if not mandatory and reviewer_load[reviewer] >= reviewer_cap:
 			return False
 		key = (reviewer, reviewee)
@@ -477,12 +549,28 @@ def _build_balanced_pairs(roles, cycle_key=None):
 		for _, team_leader in context["tl_by_dept"].items():
 			add_pair(team_leader, context["md_name"], "TL_to_MD", mandatory=True)
 
+	# EXCO oversight circle: supervised team both ways, EXCO peers, and the MD.
+	# Mandatory so circle coverage never falls victim to reviewer caps.
+	for exco_member, departments in context["exco_map"].items():
+		if exco_member not in context["employees_by_name"]:
+			continue
+		for department in departments:
+			for m in by_dept.get(department, []):
+				add_pair(exco_member, m.name, "Exco Oversight", mandatory=True)
+				add_pair(m.name, exco_member, "Exco Oversight", mandatory=True)
+		for other_exco in context["exco_employees"]:
+			if other_exco != exco_member:
+				add_pair(exco_member, other_exco, "Exco Peer", mandatory=True)
+		if context["md_name"]:
+			add_pair(exco_member, context["md_name"], "Exco to MD", mandatory=True)
+
 	def choose_candidate(candidates, reviewee, salt):
 		eligible = [
 			candidate
 			for candidate in candidates
 			if candidate != reviewee
 			and candidate not in context["excluded_reviewers"]
+			and candidate not in context["exco_employees"]
 			and (candidate, reviewee) not in seen
 			and reviewer_load[candidate] < reviewer_cap
 		]
@@ -496,13 +584,21 @@ def _build_balanced_pairs(roles, cycle_key=None):
 			),
 		)
 
-	reviewees = [employee for employee in employees if employee.department]
+	reviewees = [
+		employee
+		for employee in employees
+		if employee.department and employee.name not in context["exco_employees"]
+	]
 	reviewees.sort(key=lambda employee: _stable_token(seed, "reviewee", employee.name))
 	for reviewee in reviewees:
 		if reviewee_coverage[reviewee.name] >= target:
 			continue
 
-		internal_candidates = [member.name for member in by_dept.get(reviewee.department, [])]
+		internal_candidates = [
+			member.name
+			for member in by_dept.get(reviewee.department, [])
+			if member.name not in context["exco_employees"]
+		]
 		internal_needed = max(0, internal_target - internal_coverage[reviewee.name])
 		while internal_needed > 0 and reviewee_coverage[reviewee.name] < target:
 			candidate = choose_candidate(internal_candidates, reviewee.name, "internal")
@@ -664,10 +760,13 @@ def preview_cycle_load(strategy=None):
 
 	if selected_strategy == BALANCED_STRATEGY:
 		excluded_reviewees, _ = _excluded_employees(settings)
+		exco_employees = set(_exco_oversight(settings))
 		under_target = [
 			employee
 			for employee in _active_employees(exclude_names=excluded_reviewees)
-			if employee.department and by_reviewee[employee.name] < balanced_target
+			if employee.department
+			and employee.name not in exco_employees
+			and by_reviewee[employee.name] < balanced_target
 		]
 		if under_target:
 			warnings.append(
@@ -784,6 +883,46 @@ def preview_cycle_assignments(cycle=None):
 			warnings.append(
 				f"{len(conflict_pairs)} stored pair(s) involve employees now excluded from rating "
 				"or being rated. Remove them from the plan or rebuild the cycle to apply exclusions."
+			)
+
+	md_row = roles.get("md")
+	md_name = md_row["name"] if md_row else None
+	exco_map = _exco_oversight(settings)
+	exco_conflicts = None
+	if source == "cycle" and exco_map:
+		dept_by_employee = {e.name: e.department for e in employee_rows}
+		exco_employees = {name for name in exco_map if name in dept_by_employee}
+		exco_conflict_pairs = [
+			p
+			for p in pairs
+			if _exco_violation(
+				exco_map,
+				exco_employees,
+				md_name,
+				dept_by_employee,
+				p.get("reviewer"),
+				p.get("reviewee"),
+			)
+		]
+		if exco_conflict_pairs:
+			exco_planned = sum(
+				1 for p in exco_conflict_pairs if (p.get("status") or "Planned") == "Planned"
+			)
+			exco_involved = set()
+			for p in exco_conflict_pairs:
+				if p.get("reviewer") in exco_employees:
+					exco_involved.add(p["reviewer"])
+				if p.get("reviewee") in exco_employees:
+					exco_involved.add(p["reviewee"])
+			exco_conflicts = {
+				"total": len(exco_conflict_pairs),
+				"planned": exco_planned,
+				"assigned": len(exco_conflict_pairs) - exco_planned,
+				"employees": sorted(exco_involved),
+			}
+			warnings.append(
+				f"{len(exco_conflict_pairs)} stored pair(s) fall outside the EXCO review circle "
+				"(supervised team, EXCO peers, and the MD only). Purge them or rebuild the cycle."
 			)
 
 	employee_names = sorted(
@@ -913,6 +1052,7 @@ def preview_cycle_assignments(cycle=None):
 		"rules": sorted(by_rule.keys()),
 		"statuses": sorted({row["status"] for row in rows}),
 		"exclusion_conflicts": exclusion_conflicts,
+		"exco_conflicts": exco_conflicts,
 		"excluded_people": excluded_people,
 		"load": load_rows,
 		"rows": rows,
@@ -923,14 +1063,16 @@ def preview_cycle_assignments(cycle=None):
 @frappe.whitelist()
 @survey_admin_required
 def purge_excluded_pairs(cycle=None):
-	"""Drop Planned pairs that involve employees excluded from rating/being rated.
+	"""Drop Planned pairs that violate exclusions or the EXCO review circle.
 
 	Assigned/Completed pairs are never touched — they already have surveys in flight.
+	Exclusions always take precedence over the EXCO circle.
 	"""
 	settings = _settings()
 	excluded_reviewees, excluded_reviewers = _excluded_employees(settings)
-	if not excluded_reviewees and not excluded_reviewers:
-		frappe.throw("No employees are currently excluded from rating or being rated.")
+	exco_map = _exco_oversight(settings)
+	if not excluded_reviewees and not excluded_reviewers and not exco_map:
+		frappe.throw("No exclusions or EXCO oversight rules are configured.")
 
 	doc = None
 	if cycle:
@@ -949,15 +1091,39 @@ def purge_excluded_pairs(cycle=None):
 	if not doc:
 		frappe.throw("No open Survey Cycle to clean.")
 
+	roles = resolve_org_roles()
+	md_row = roles.get("md")
+	md_name = md_row["name"] if md_row else None
+
+	participants = set()
+	for pair in doc.pairs or []:
+		participants.add(pair.reviewer)
+		participants.add(pair.reviewee)
+	dept_by_employee = {
+		row.name: row.department
+		for row in frappe.get_all(
+			"Employee",
+			filters={"name": ["in", sorted(participants)]},
+			fields=["name", "department"],
+		)
+	}
+	exco_employees = {name for name in exco_map if name in dept_by_employee}
+
 	kept = []
 	removed = 0
+	exco_removed = 0
 	skipped = 0
 	for pair in doc.pairs or []:
-		involved = pair.reviewer in excluded_reviewers or pair.reviewee in excluded_reviewees
-		if involved and (pair.status or "Planned") == "Planned":
+		breaks_exclusion = pair.reviewer in excluded_reviewers or pair.reviewee in excluded_reviewees
+		breaks_exco = _exco_violation(
+			exco_map, exco_employees, md_name, dept_by_employee, pair.reviewer, pair.reviewee
+		)
+		if (breaks_exclusion or breaks_exco) and (pair.status or "Planned") == "Planned":
 			removed += 1
+			if breaks_exco and not breaks_exclusion:
+				exco_removed += 1
 			continue
-		if involved:
+		if breaks_exclusion or breaks_exco:
 			skipped += 1
 		kept.append(pair)
 
@@ -971,6 +1137,7 @@ def purge_excluded_pairs(cycle=None):
 	return {
 		"cycle": doc.name,
 		"removed": removed,
+		"exco_removed": exco_removed,
 		"kept_assigned_or_completed": skipped,
 		"remaining_pairs": len(kept),
 	}

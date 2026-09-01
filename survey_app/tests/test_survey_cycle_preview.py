@@ -215,3 +215,102 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		self.assertEqual(cycle_doc.total_pairs, 2)
 		cycle_doc.save.assert_called_once()
 		frappe_api.db.commit.assert_called_once()
+
+	@patch("survey_app.survey_cycle.resolve_org_roles", return_value={"md": None, "team_leaders": [], "warnings": []})
+	@patch("survey_app.survey_cycle.frappe")
+	def test_cycle_preview_flags_exco_circle_conflicts(self, frappe_api, _resolve_org_roles):
+		frappe_api._dict.side_effect = frappe._dict
+		cycle_doc = frappe._dict(
+			name="SCY-2026-00001",
+			title="Q3",
+			status="Open",
+			current_batch=0,
+			pairs=[
+				frappe._dict(reviewer="EMP-010", reviewee="EMP-011", rule_type="Peer", status="Planned", batch_no=0),
+				frappe._dict(reviewer="EMP-011", reviewee="EMP-012", rule_type="Nearness", status="Planned", batch_no=0),
+				frappe._dict(reviewer="EMP-012", reviewee="EMP-011", rule_type="Peer", status="Assigned", batch_no=1),
+				frappe._dict(reviewer="EMP-010", reviewee="EMP-012", rule_type="Peer", status="Planned", batch_no=0),
+			],
+		)
+
+		def fake_get_doc(doctype, name=None, **kwargs):
+			if doctype == "Value Scoring Settings":
+				return frappe._dict(
+					exclude_rated=[],
+					exclude_rating=[],
+					exco_oversight=[frappe._dict(employee="EMP-011", department="Finance")],
+				)
+			return cycle_doc
+
+		frappe_api.get_doc.side_effect = fake_get_doc
+		frappe_api.db.get_value.return_value = "SCY-2026-00001"
+
+		def fake_get_all(doctype, filters=None, fields=None, **kwargs):
+			if filters and "name" in filters:
+				rows = {
+					"EMP-010": frappe._dict(name="EMP-010", employee_name="Teammate One", department="Finance"),
+					"EMP-011": frappe._dict(name="EMP-011", employee_name="Exco Person", department="Finance"),
+					"EMP-012": frappe._dict(name="EMP-012", employee_name="Outsider", department="HR"),
+				}
+				return [rows[n] for n in filters["name"][1] if n in rows]
+			return []
+
+		frappe_api.get_all.side_effect = fake_get_all
+
+		result = unwrap(preview_cycle_assignments)()
+
+		conflicts = result["exco_conflicts"]
+		self.assertEqual(conflicts["total"], 2)
+		self.assertEqual(conflicts["planned"], 1)
+		self.assertEqual(conflicts["assigned"], 1)
+		self.assertEqual(conflicts["employees"], ["EMP-011"])
+		self.assertTrue(any("EXCO" in w for w in result["warnings"]))
+
+	@patch("survey_app.survey_cycle.resolve_org_roles", return_value={"md": None, "team_leaders": [], "warnings": []})
+	@patch("survey_app.survey_cycle.frappe")
+	def test_purge_drops_planned_pairs_outside_the_exco_circle(self, frappe_api, _resolve_org_roles):
+		frappe_api._dict.side_effect = frappe._dict
+		cycle_doc = frappe._dict(
+			name="SCY-2026-00001",
+			total_pairs=3,
+			flags=frappe._dict(),
+			pairs=[
+				frappe._dict(reviewer="EMP-011", reviewee="EMP-012", rule_type="Nearness", status="Planned", batch_no=0),
+				frappe._dict(reviewer="EMP-010", reviewee="EMP-011", rule_type="Peer", status="Planned", batch_no=0),
+				frappe._dict(reviewer="EMP-012", reviewee="EMP-011", rule_type="Peer", status="Assigned", batch_no=1),
+			],
+		)
+		cycle_doc.save = MagicMock()
+
+		def fake_get_doc(doctype, name=None, **kwargs):
+			if doctype == "Value Scoring Settings":
+				return frappe._dict(
+					exclude_rated=[],
+					exclude_rating=[],
+					exco_oversight=[frappe._dict(employee="EMP-011", department="Finance")],
+				)
+			return cycle_doc
+
+		frappe_api.get_doc.side_effect = fake_get_doc
+		frappe_api.db.get_value.return_value = "SCY-2026-00001"
+
+		def fake_get_all(doctype, filters=None, fields=None, **kwargs):
+			if filters and "name" in filters:
+				rows = {
+					"EMP-010": frappe._dict(name="EMP-010", employee_name="Teammate One", department="Finance"),
+					"EMP-011": frappe._dict(name="EMP-011", employee_name="Exco Person", department="Finance"),
+					"EMP-012": frappe._dict(name="EMP-012", employee_name="Outsider", department="HR"),
+				}
+				return [rows[n] for n in filters["name"][1] if n in rows]
+			return []
+
+		frappe_api.get_all.side_effect = fake_get_all
+
+		result = unwrap(purge_excluded_pairs)()
+
+		self.assertEqual(result["removed"], 1)
+		self.assertEqual(result["exco_removed"], 1)
+		self.assertEqual(result["kept_assigned_or_completed"], 1)
+		self.assertEqual(result["remaining_pairs"], 2)
+		cycle_doc.save.assert_called_once()
+		frappe_api.db.commit.assert_called_once()

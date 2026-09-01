@@ -702,6 +702,12 @@ survey_app.SurveySetup = class SurveySetup {
 		if (!this._team_leader_rows.length) {
 			this._team_leader_rows.push({ department: '', employee: '', employee_name: '' });
 		}
+		this._exco_rows = (settings.exco_oversight || []).map(function (r) {
+			return { department: r.department, employee: r.employee, employee_name: r.employee_name || '' };
+		});
+		if (!this._exco_rows.length) {
+			this._exco_rows.push({ department: '', employee: '', employee_name: '' });
+		}
 
 		var dept_opts = departments.map(function (d) {
 			return '<option value="' + frappe.utils.escape_html(d.name) + '">' +
@@ -741,6 +747,15 @@ survey_app.SurveySetup = class SurveySetup {
 							<button class="btn btn-xs btn-default" id="add-tl-row" style="margin-top:8px;">
 								<i class="fa fa-plus"></i> ${__('Add Team Leader')}
 							</button>
+							<hr>
+							<label>${__('EXCO Oversight')}</label>
+							<p class="text-muted small">
+								${__('Each EXCO member only reviews, and is only reviewed by, the department they oversee, other EXCO members, and the MD. They are never assigned by nearness or generic peer rules.')}
+							</p>
+							<div id="exco-rows"></div>
+							<button class="btn btn-xs btn-default" id="add-exco-row" style="margin-top:8px;">
+								<i class="fa fa-plus"></i> ${__('Add EXCO Member')}
+							</button>
 							<div style="margin-top:16px;">
 								<button class="btn btn-primary" id="save-roles-btn">
 									<i class="fa fa-save"></i> ${__('Save Roles')}
@@ -777,10 +792,17 @@ survey_app.SurveySetup = class SurveySetup {
 		this._md_control.set_value(settings.md_employee || '');
 
 		this._render_tl_rows(dept_opts);
+		this._render_exco_rows(dept_opts);
 
 		this.tab_roles.find('#add-tl-row').on('click', function () {
 			me._team_leader_rows.push({ department: '', employee: '', employee_name: '' });
 			me._render_tl_rows(dept_opts);
+		});
+
+		this.tab_roles.find('#add-exco-row').on('click', function () {
+			me._collect_exco_rows();
+			me._exco_rows.push({ department: '', employee: '', employee_name: '' });
+			me._render_exco_rows(dept_opts);
 		});
 
 		this.tab_roles.find('#save-roles-btn').on('click', function () {
@@ -872,15 +894,71 @@ survey_app.SurveySetup = class SurveySetup {
 		});
 	}
 
+	_render_exco_rows(dept_opts) {
+		var me = this;
+		var $box = this.tab_roles.find('#exco-rows').empty();
+		this._exco_rows.forEach(function (row, idx) {
+			var $row = $(`
+				<div class="row exco-row" data-idx="${idx}" style="margin-bottom:8px;align-items:center;">
+					<div class="col-sm-5 exco-emp"></div>
+					<div class="col-sm-1 text-center text-muted">→</div>
+					<div class="col-sm-4">
+						<select class="form-control exco-dept">${dept_opts}</select>
+					</div>
+					<div class="col-sm-2">
+						<button class="btn btn-xs btn-default exco-remove" type="button"><i class="fa fa-trash"></i></button>
+					</div>
+				</div>
+			`);
+			$row.find('.exco-dept').val(row.department || '');
+			var ctrl = frappe.ui.form.make_control({
+				parent: $row.find('.exco-emp'),
+				df: {
+					fieldtype: 'Link',
+					options: 'Employee',
+					fieldname: 'exco_employee_' + idx,
+					default: row.employee || '',
+					get_query: function () {
+						return { filters: { status: 'Active' } };
+					}
+				},
+				render_input: true
+			});
+			ctrl.set_value(row.employee || '');
+			row._ctrl = ctrl;
+			$row.find('.exco-remove').on('click', function () {
+				me._collect_exco_rows();
+				me._exco_rows.splice(idx, 1);
+				if (!me._exco_rows.length) {
+					me._exco_rows.push({ department: '', employee: '', employee_name: '' });
+				}
+				me._render_exco_rows(dept_opts);
+			});
+			$box.append($row);
+		});
+	}
+
+	_collect_exco_rows() {
+		var me = this;
+		this.tab_roles.find('.exco-row').each(function () {
+			var idx = cint($(this).data('idx'));
+			if (!me._exco_rows[idx]) return;
+			me._exco_rows[idx].employee = (me._exco_rows[idx]._ctrl && me._exco_rows[idx]._ctrl.get_value()) || '';
+			me._exco_rows[idx].department = $(this).find('.exco-dept').val() || '';
+		});
+	}
+
 	_save_team_leaders(on_done) {
 		var me = this;
 		this._collect_tl_rows();
+		this._collect_exco_rows();
 		var existing = this.data.settings || {};
 		var data = Object.assign({}, existing, {
 			role_resolution_mode: this.tab_roles.find('#role-mode').val() || 'Hybrid',
 			md_employee: (this._md_control && this._md_control.get_value()) || '',
 			team_leader_designations: this.tab_roles.find('#tl-designations').val() || '',
-			team_leaders: this._team_leader_rows.filter(function (r) { return r.department && r.employee; })
+			team_leaders: this._team_leader_rows.filter(function (r) { return r.department && r.employee; }),
+			exco_oversight: (this._exco_rows || []).filter(function (r) { return r.department && r.employee; })
 		});
 		frappe.call({
 			method: 'survey_app.survey_config.save_scoring_settings',
@@ -1071,6 +1149,9 @@ survey_app.SurveySetup = class SurveySetup {
 			Peer: __('Department Peer'),
 			TL_to_MD: __('Team Leader → Managing Director'),
 			Nearness: __('Departmental Nearness'),
+			'Exco Oversight': __('EXCO Oversight (Supervised Team)'),
+			'Exco Peer': __('EXCO Peer'),
+			'Exco to MD': __('EXCO → Managing Director'),
 			Other: __('Other')
 		};
 		var option = function (value, label) {
@@ -1104,21 +1185,29 @@ survey_app.SurveySetup = class SurveySetup {
 				(data.warnings || []).map(esc).join('<br>') + '</div>'
 			: '';
 		var exclusion = data.exclusion_conflicts || null;
-		var exclusion_html = '';
+		var exco_conflicts = data.exco_conflicts || null;
+		var conflict_lines = [];
 		if (exclusion && exclusion.total) {
-			var exclusion_note = __('The stored plan still contains {0} pair(s) involving {1} employee(s) now excluded from rating or being rated ({2} planned, {3} already assigned).', [
+			conflict_lines.push(__('Planned pairs with excluded employees: {0} ({1} already assigned). Involved: {2}', [
 				exclusion.total,
-				(exclusion.employees || []).length,
-				exclusion.planned || 0,
-				exclusion.assigned || 0
-			]);
+				exclusion.assigned || 0,
+				(exclusion.employees || []).join(', ')
+			]));
+		}
+		if (exco_conflicts && exco_conflicts.total) {
+			conflict_lines.push(__('Pairs outside the EXCO review circle: {0} ({1} already assigned). Involved: {2}', [
+				exco_conflicts.total,
+				exco_conflicts.assigned || 0,
+				(exco_conflicts.employees || []).join(', ')
+			]));
+		}
+		var exclusion_html = '';
+		if (conflict_lines.length) {
 			exclusion_html = '<div class="alert alert-danger" style="margin-bottom:12px;"><b>' +
-				__('Excluded employees are still in the plan.') + '</b> ' + esc(exclusion_note) +
-				'<div class="text-muted small" style="margin-top:4px;">' +
-				esc((exclusion.employees || []).join(', ')) + '</div>' +
-				(exclusion.planned ?
-					'<button class="btn btn-sm btn-danger purge-excluded-btn" style="margin-top:8px;">' +
-					'<i class="fa fa-eraser"></i> ' + __('Remove Excluded from Plan') + '</button>' : '') +
+				__('The stored plan contains pairs that break the current rules.') + '</b><br>' +
+				conflict_lines.map(esc).join('<br>') +
+				'<button class="btn btn-sm btn-danger purge-excluded-btn" style="margin-top:8px;">' +
+				'<i class="fa fa-eraser"></i> ' + __('Remove Invalid Planned Pairs') + '</button>' +
 				'</div>';
 		}
 		var $mount = $(`

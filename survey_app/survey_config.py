@@ -60,6 +60,14 @@ def get_config_data():
                 }
                 for d in (getattr(doc, "team_leaders", None) or [])
             ],
+            "exco_oversight": [
+                {
+                    "department": d.department,
+                    "employee": d.employee,
+                    "employee_name": d.employee_name,
+                }
+                for d in (getattr(doc, "exco_oversight", None) or [])
+            ],
             "completeness_cycle": getattr(doc, "completeness_cycle", None) or "Quarterly",
             "enable_scheduled_reports": getattr(doc, "enable_scheduled_reports", None) or 0,
             "report_frequency": getattr(doc, "report_frequency", None) or "",
@@ -322,6 +330,14 @@ def save_scoring_settings(settings_data):
         for entry in settings_data.get("team_leaders") or []:
             if entry.get("department") and entry.get("employee"):
                 doc.append("team_leaders", {
+                    "department": entry.get("department"),
+                    "employee": entry.get("employee"),
+                })
+    if "exco_oversight" in settings_data:
+        doc.exco_oversight = []
+        for entry in settings_data.get("exco_oversight") or []:
+            if entry.get("department") and entry.get("employee"):
+                doc.append("exco_oversight", {
                     "department": entry.get("department"),
                     "employee": entry.get("employee"),
                 })
@@ -627,6 +643,7 @@ def install_workspace():
         "survey_report_log",
         "survey_email_log",
         "survey_team_leader",
+        "survey_exco_oversight",
     ):
         json_path = os.path.join(doctype_dir, folder, f"{folder}.json")
         if os.path.exists(json_path):

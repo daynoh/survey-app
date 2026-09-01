@@ -22,6 +22,7 @@
   "md_employee",
   "team_leader_designations",
   "team_leaders",
+  "exco_oversight",
   "section_break_schedule",
   "enable_scheduled_generation",
   "generation_frequency",
@@ -140,6 +141,13 @@
    "fieldtype": "Table",
    "label": "Team Leaders",
    "options": "Survey Team Leader"
+  },
+  {
+   "description": "EXCO members are removed from generic peer/nearness assignment. Each one only reviews, and is only reviewed by, the department they oversee, other EXCO members, and the MD.",
+   "fieldname": "exco_oversight",
+   "fieldtype": "Table",
+   "label": "EXCO Oversight (Member → Department Overseen)",
+   "options": "Survey Exco Oversight"
   },
   {
    "fieldname": "section_break_schedule",
