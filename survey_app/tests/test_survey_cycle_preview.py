@@ -5,9 +5,11 @@ from unittest.mock import MagicMock, patch
 import frappe
 
 from survey_app.survey_cycle import (
+	get_unsent_invitations,
 	preview_cycle_assignments,
 	preview_cycle_load,
 	purge_excluded_pairs,
+	resend_survey_invitation,
 )
 
 
@@ -354,3 +356,133 @@ class TestCycleLoadBatchWindow(TestCase):
 		self.assertEqual(result["batches_in_cycle"], 4)
 		self.assertTrue(result["batch_window_note"])
 		self.assertIn("2026-09-30", result["batch_window_note"])
+
+
+class TestApplyRulesAndUnsentInvitations(TestCase):
+	@patch("survey_app.survey_cycle.resolve_org_roles", return_value={"md": None, "team_leaders": [], "warnings": []})
+	@patch("survey_app.survey_cycle.frappe")
+	def test_purge_grafts_missing_exco_circle_pairs(self, frappe_api, _resolve_org_roles):
+		frappe_api._dict.side_effect = frappe._dict
+		cycle_doc = frappe._dict(
+			name="SCY-2026-00001",
+			total_pairs=2,
+			flags=frappe._dict(),
+			pairs=[
+				frappe._dict(reviewer="EMP-011", reviewee="EMP-012", rule_type="Nearness", status="Planned", batch_no=0),
+				frappe._dict(reviewer="EMP-010", reviewee="EMP-011", rule_type="Peer", status="Planned", batch_no=0),
+			],
+		)
+		cycle_doc.save = MagicMock()
+
+		def fake_get_doc(doctype, name=None, **kwargs):
+			if doctype == "Value Scoring Settings":
+				return frappe._dict(
+					exclude_rated=[],
+					exclude_rating=[],
+					exco_oversight=[frappe._dict(employee="EMP-011", department="Finance")],
+				)
+			return cycle_doc
+
+		frappe_api.get_doc.side_effect = fake_get_doc
+		frappe_api.db.get_value.return_value = "SCY-2026-00001"
+
+		def fake_get_all(doctype, filters=None, fields=None, **kwargs):
+			if filters and "name" in filters:
+				rows = {
+					"EMP-010": frappe._dict(name="EMP-010", employee_name="Teammate", department="Finance"),
+					"EMP-011": frappe._dict(name="EMP-011", employee_name="Exco", department="Finance"),
+					"EMP-012": frappe._dict(name="EMP-012", employee_name="Outsider", department="HR"),
+				}
+				return [rows[n] for n in filters["name"][1] if n in rows]
+			if filters and "status" in filters:
+				return [
+					frappe._dict(name="EMP-010", employee_name="Teammate", department="Finance"),
+					frappe._dict(name="EMP-011", employee_name="Exco", department="Finance"),
+					frappe._dict(name="EMP-012", employee_name="Outsider", department="HR"),
+				]
+			return []
+
+		frappe_api.get_all.side_effect = fake_get_all
+
+		result = unwrap(purge_excluded_pairs)()
+
+		self.assertEqual(result["removed"], 1)
+		self.assertEqual(result["grafted"], 1)
+		self.assertEqual(result["remaining_pairs"], 2)
+		self.assertEqual(cycle_doc.total_pairs, 2)
+		cycle_doc.save.assert_called_once()
+
+	@patch("survey_app.survey_cycle.frappe")
+	def test_get_unsent_invitations_flags_missing_invites(self, frappe_api):
+		frappe_api._dict.side_effect = frappe._dict
+		cycle_doc = frappe._dict(
+			name="SCY-2026-00001",
+			pairs=[
+				frappe._dict(reviewer="EMP-010", reviewee="EMP-012", rule_type="Peer", status="Assigned", batch_no=1, survey="SURV-001"),
+				frappe._dict(reviewer="EMP-011", reviewee="EMP-012", rule_type="Peer", status="Assigned", batch_no=1, survey="SURV-002"),
+				frappe._dict(reviewer="EMP-010", reviewee="EMP-011", rule_type="Peer", status="Planned", batch_no=0, survey=None),
+			],
+		)
+
+		def fake_get_doc(doctype, name=None, **kwargs):
+			return cycle_doc
+
+		frappe_api.get_doc.side_effect = fake_get_doc
+		frappe_api.db.get_value.return_value = "SCY-2026-00001"
+
+		def fake_get_value(doctype, name, fields=None, **kwargs):
+			if doctype == "Employee":
+				data = {
+					"EMP-010": frappe._dict(employee_name="Has User", user_id="has.user@x.com"),
+					"EMP-011": frappe._dict(employee_name="No User", user_id=None),
+					"EMP-012": frappe._dict(employee_name="Reviewee", user_id=None),
+				}
+				return data.get(name)
+			if doctype == "User":
+				return frappe._dict(enabled=1, name=name)
+			return None
+
+		frappe_api.db.get_value.side_effect = fake_get_value
+
+		def fake_get_all(doctype, filters=None, fields=None, **kwargs):
+			if doctype == "Survey Email Log":
+				return ["SURV-001"]
+			return []
+
+		frappe_api.get_all.side_effect = fake_get_all
+
+		result = unwrap(get_unsent_invitations)()
+
+		self.assertEqual(result["total"], 1)
+		row = result["rows"][0]
+		self.assertEqual(row["survey"], "SURV-002")
+		self.assertEqual(row["reviewer"], "EMP-011")
+		self.assertFalse(row["resendable"])
+		self.assertIn("No ERP user", row["reason"])
+
+	@patch("survey_app.survey_cycle.send_survey_notification_and_task")
+	@patch("survey_app.survey_cycle.frappe")
+	def test_resend_survey_invitation_requires_linked_user(self, frappe_api, _send_notification):
+		frappe_api._dict.side_effect = frappe._dict
+
+		def fake_get_value(doctype, name, fields=None, **kwargs):
+			if doctype == "Employee" and fields == "user_id":
+				return None
+			return True
+
+		frappe_api.db.get_value.side_effect = fake_get_value
+		frappe_api.db.exists.return_value = True
+
+		with self.assertRaises(frappe.ValidationError):
+			unwrap(resend_survey_invitation)("SURV-001", "EMP-011", "EMP-012", cycle="SCY-2026-00001")
+		_send_notification.assert_not_called()
+
+		def fake_get_value_ok(doctype, name, fields=None, **kwargs):
+			if doctype == "Employee" and fields == "user_id":
+				return "has.user@x.com"
+			return True
+
+		frappe_api.db.get_value.side_effect = fake_get_value_ok
+		result = unwrap(resend_survey_invitation)("SURV-001", "EMP-010", "EMP-012", cycle="SCY-2026-00001")
+		self.assertEqual(result["status"], "sent")
+		_send_notification.assert_called_once()

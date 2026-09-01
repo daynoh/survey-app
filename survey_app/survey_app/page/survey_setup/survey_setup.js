@@ -1490,8 +1490,17 @@ survey_app.SurveySetup = class SurveySetup {
 									<i class="fa fa-info-circle"></i> ${__('Check Status')}
 								</button>
 							</div>
-							<div id="auto-gen-status" style="margin-top:14px;"></div>
-						</div>
+								<div id="auto-gen-status" style="margin-top:14px;"></div>
+								<hr>
+								<label>${__('Unsent Invitations')}</label>
+								<p class="text-muted small">
+									${__('Assigned surveys whose invite email never went out — usually because the reviewer had no ERP user linked. Fix the employee record, then resend.')}
+								</p>
+								<button class="btn btn-default btn-sm" id="check-unsent-btn">
+									<i class="fa fa-search"></i> ${__('Check Unsent Invitations')}
+								</button>
+								<div id="unsent-invitations" style="margin-top:12px;"></div>
+							</div>
 					</div>
 				</div>
 			</div>
@@ -1635,8 +1644,102 @@ survey_app.SurveySetup = class SurveySetup {
 			me.load_cycle_status();
 		});
 
+		this.tab_automation.find('#check-unsent-btn').on('click', function() {
+			frappe.call({
+				method: 'survey_app.survey_cycle.get_unsent_invitations',
+				freeze: true,
+				callback: function(r) {
+					if (r.exc || !r.message) return;
+					me._unsent_cycle = r.message.cycle || null;
+					me._show_unsent_invitations(r.message);
+				}
+			});
+		});
+
 		this.refresh_countdown_from_server();
 		this.load_cycle_status();
+	}
+
+	_show_unsent_invitations(data) {
+		var me = this;
+		var esc = frappe.utils.escape_html;
+		var $box = this.tab_automation.find('#unsent-invitations');
+		var rows = data.rows || [];
+		if (!rows.length) {
+			$box.html('<p class="text-muted">' + __('All assigned surveys have their invite emails logged.') + '</p>');
+			return;
+		}
+		var body = rows.map(function(row, idx) {
+			var action = row.resendable
+				? '<button class="btn btn-xs btn-primary unsent-resend" data-idx="' + idx + '"><i class="fa fa-paper-plane"></i> ' + __('Resend') + '</button>'
+				: '<span class="text-muted small">' + esc(__('Fix the employee record first')) + '</span>';
+			return '<tr>' +
+				'<td><b>' + esc(row.reviewer_name || '') + '</b><div class="text-muted small">' + esc(row.email || row.reason || '') + '</div></td>' +
+				'<td>' + esc(row.reviewee_name || '') + '</td>' +
+				'<td>' + esc(row.reason || '') + '</td>' +
+				'<td class="text-right">' + action + '</td></tr>';
+		}).join('');
+		var any_resendable = rows.some(function(row) { return row.resendable; });
+		var html = '<div class="table-responsive" style="max-height:40vh;overflow:auto;border:1px solid #d1d8dd;">' +
+			'<table class="table table-bordered table-condensed" style="margin:0;"><thead><tr>' +
+			'<th>' + __('Reviewer') + '</th><th>' + __('Reviewing') + '</th><th>' + __('Why it did not go') + '</th><th></th>' +
+			'</tr></thead><tbody>' + body + '</tbody></table></div>' +
+			'<p class="text-muted small" style="margin-top:6px;">' + __('{0} invitation(s) did not go out.', [rows.length]) + '</p>';
+		if (any_resendable) {
+			html += '<button class="btn btn-sm btn-primary" id="resend-all-unsent-btn"><i class="fa fa-paper-plane"></i> ' + __('Resend All Ready') + '</button>';
+		}
+		$box.html(html);
+
+		$box.find('.unsent-resend').on('click', function() {
+			me._resend_one_invitation(rows[cint($(this).data('idx'))]);
+		});
+		$box.find('#resend-all-unsent-btn').on('click', function() {
+			var ready = rows.filter(function(row) { return row.resendable; });
+			frappe.confirm(__('Resend {0} invitation(s) now?', [ready.length]), function() {
+				me._resend_invitations_sequentially(ready, 0, 0);
+			});
+		});
+	}
+
+	_resend_one_invitation(row) {
+		var me = this;
+		frappe.call({
+			method: 'survey_app.survey_cycle.resend_survey_invitation',
+			args: {
+				survey: row.survey,
+				reviewer: row.reviewer,
+				reviewee: row.reviewee,
+				cycle: me._unsent_cycle || undefined
+			},
+			freeze: true,
+			callback: function(r) {
+				if (r.exc) return;
+				frappe.show_alert({ message: __('Invitation resent to {0}', [row.reviewer_name || row.reviewer]), indicator: 'green' });
+				me.tab_automation.find('#check-unsent-btn').trigger('click');
+			}
+		});
+	}
+
+	_resend_invitations_sequentially(rows, index, sent) {
+		var me = this;
+		if (index >= rows.length) {
+			frappe.show_alert({ message: __('Resent {0} invitation(s)', [sent]), indicator: 'green' });
+			me.tab_automation.find('#check-unsent-btn').trigger('click');
+			return;
+		}
+		frappe.call({
+			method: 'survey_app.survey_cycle.resend_survey_invitation',
+			args: {
+				survey: rows[index].survey,
+				reviewer: rows[index].reviewer,
+				reviewee: rows[index].reviewee,
+				cycle: me._unsent_cycle || undefined
+			},
+			callback: function(r) {
+				var next_sent = r.exc ? sent : sent + 1;
+				me._resend_invitations_sequentially(rows, index + 1, next_sent);
+			}
+		});
 	}
 
 	_init_report_preview_controls() {

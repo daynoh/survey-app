@@ -1075,10 +1075,11 @@ def preview_cycle_assignments(cycle=None):
 @frappe.whitelist()
 @survey_admin_required
 def purge_excluded_pairs(cycle=None):
-	"""Drop Planned pairs that violate exclusions or the EXCO review circle.
+	"""Apply exclusions and the EXCO circle to the stored plan.
 
-	Assigned/Completed pairs are never touched — they already have surveys in flight.
-	Exclusions always take precedence over the EXCO circle.
+	Planned pairs that violate the rules are dropped; missing EXCO circle pairs
+	are grafted in as Planned. Assigned/Completed pairs are never touched — they
+	already have surveys in flight. Exclusions always take precedence.
 	"""
 	settings = _settings()
 	excluded_reviewees, excluded_reviewers = _excluded_employees(settings)
@@ -1086,22 +1087,7 @@ def purge_excluded_pairs(cycle=None):
 	if not excluded_reviewees and not excluded_reviewers and not exco_map:
 		frappe.throw("No exclusions or EXCO oversight rules are configured.")
 
-	doc = None
-	if cycle:
-		if not frappe.db.exists("Survey Cycle", cycle):
-			frappe.throw("Survey Cycle not found")
-		doc = frappe.get_doc("Survey Cycle", cycle)
-	else:
-		open_cycle = frappe.db.get_value(
-			"Survey Cycle",
-			{"status": ["in", ["Open", "Generating", "Reporting"]]},
-			"name",
-			order_by="period_start desc",
-		)
-		if open_cycle:
-			doc = frappe.get_doc("Survey Cycle", open_cycle)
-	if not doc:
-		frappe.throw("No open Survey Cycle to clean.")
+	doc = _resolve_cycle(cycle)
 
 	roles = resolve_org_roles()
 	md_row = roles.get("md")
@@ -1139,7 +1125,52 @@ def purge_excluded_pairs(cycle=None):
 			skipped += 1
 		kept.append(pair)
 
-	if removed:
+	# Graft missing EXCO circle pairs so mid-cycle mapping changes still give
+	# newly mapped members their supervised-team, peer, and MD coverage.
+	existing = set()
+	for pair in kept:
+		existing.add((pair.reviewer, pair.reviewee))
+	grafted = 0
+	if exco_map:
+		employees = _active_employees(exclude_names=excluded_reviewees)
+		employees_by_name = {e.name: e for e in employees}
+		by_dept = defaultdict(list)
+		for e in employees:
+			if e.department:
+				by_dept[e.department].append(e)
+		for exco_member, departments in exco_map.items():
+			if exco_member not in employees_by_name:
+				continue
+			wanted = []
+			for department in departments:
+				for m in by_dept.get(department, []):
+					if m.name != exco_member:
+						wanted.append((exco_member, m.name, "Exco Oversight"))
+						wanted.append((m.name, exco_member, "Exco Oversight"))
+			for other in exco_map:
+				if other != exco_member and other in employees_by_name:
+					wanted.append((exco_member, other, "Exco Peer"))
+			if md_name:
+				wanted.append((exco_member, md_name, "Exco to MD"))
+			for reviewer, reviewee, rule_type in wanted:
+				if reviewer in excluded_reviewers or reviewee in excluded_reviewees:
+					continue
+				if (reviewer, reviewee) in existing:
+					continue
+				existing.add((reviewer, reviewee))
+				kept.append(
+					frappe._dict(
+						reviewer=reviewer,
+						reviewee=reviewee,
+						rule_type=rule_type,
+						status="Planned",
+						batch_no=0,
+						survey=None,
+					)
+				)
+				grafted += 1
+
+	if removed or grafted:
 		doc.pairs = kept
 		doc.total_pairs = len(kept)
 		doc.flags.ignore_permissions = True
@@ -1150,9 +1181,99 @@ def purge_excluded_pairs(cycle=None):
 		"cycle": doc.name,
 		"removed": removed,
 		"exco_removed": exco_removed,
+		"grafted": grafted,
 		"kept_assigned_or_completed": skipped,
 		"remaining_pairs": len(kept),
 	}
+
+
+@frappe.whitelist()
+@survey_admin_required
+def get_unsent_invitations(cycle=None):
+	"""Assigned surveys whose invite email never went out, with the reason."""
+	doc = _resolve_cycle(cycle)
+	invited = set(
+		frappe.get_all(
+			"Survey Email Log",
+			filters={"email_type": "Survey Invite", "cycle": doc.name},
+			pluck="survey",
+		)
+	)
+	rows = []
+	for pair in doc.pairs or []:
+		if pair.status != "Assigned" or not pair.survey or pair.survey in invited:
+			continue
+		reviewer_row = frappe.db.get_value(
+			"Employee", pair.reviewer, ["employee_name", "user_id"], as_dict=True
+		)
+		reason = "Employee not found"
+		email = None
+		if reviewer_row:
+			if not reviewer_row.user_id:
+				reason = "No ERP user linked to this employee (no email to send to)"
+			else:
+				user = frappe.db.get_value(
+					"User", reviewer_row.user_id, ["enabled", "name"], as_dict=True
+				)
+				if not user:
+					reason = "Linked ERP user no longer exists"
+				elif not user.enabled:
+					reason = "Linked ERP user is disabled"
+				else:
+					reason = "Email available — ready to resend"
+					email = reviewer_row.user_id
+		rows.append(
+			{
+				"survey": pair.survey,
+				"reviewer": pair.reviewer,
+				"reviewer_name": (reviewer_row.employee_name if reviewer_row else None) or pair.reviewer,
+				"reviewee": pair.reviewee,
+				"reviewee_name": frappe.db.get_value("Employee", pair.reviewee, "employee_name")
+				or pair.reviewee,
+				"batch_no": cint(pair.batch_no),
+				"reason": reason,
+				"email": email,
+				"resendable": bool(email),
+			}
+		)
+	rows.sort(key=lambda row: (row["reviewer_name"] or "").lower())
+	return {"cycle": doc.name, "rows": rows, "total": len(rows)}
+
+
+@frappe.whitelist()
+@survey_admin_required
+def resend_survey_invitation(survey, reviewer, reviewee, cycle=None):
+	"""Re-attempt the invite email + task for an already-assigned survey."""
+	if not frappe.db.exists("Survey", survey):
+		frappe.throw("Survey not found")
+	reviewer_user = frappe.db.get_value("Employee", reviewer, "user_id")
+	if not reviewer_user or not frappe.db.exists("User", reviewer_user):
+		frappe.throw(
+			f"{reviewer} has no linked ERP user with an email. Link a user to the Employee record first, then resend."
+		)
+	try:
+		send_survey_notification_and_task(survey, reviewer, reviewee, cycle=cycle)
+	except Exception:
+		frappe.log_error(title="Survey Invite Resend Failed", message=frappe.get_traceback())
+		frappe.throw("Resend failed — see the Error Log for details.")
+	return {"status": "sent", "survey": survey, "recipient": reviewer_user}
+
+
+def _resolve_cycle(cycle=None):
+	"""Return the named Survey Cycle doc, or the most recent open one."""
+	if cycle:
+		if not frappe.db.exists("Survey Cycle", cycle):
+			frappe.throw("Survey Cycle not found")
+		return frappe.get_doc("Survey Cycle", cycle)
+	open_cycle = frappe.db.get_value(
+		"Survey Cycle",
+		{"status": ["in", ["Open", "Generating", "Reporting"]]},
+		"name",
+		order_by="period_start desc",
+	)
+	if open_cycle:
+		return frappe.get_doc("Survey Cycle", open_cycle)
+	frappe.throw("No open Survey Cycle found.")
 
 
 def _batches_in_cycle(survey_freq, completeness_cycle):
