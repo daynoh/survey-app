@@ -341,6 +341,7 @@ def _pair_context(roles):
 	nearness_map = {(row.department, row.department2): flt(row.factor) for row in nearness}
 
 	exco_map = _exco_oversight(settings)
+	employees_by_name = {employee.name: employee for employee in employees}
 	exco_employees = {name for name in exco_map if name in employees_by_name}
 	dept_by_employee = {e.name: e.department for e in employees}
 
@@ -352,7 +353,7 @@ def _pair_context(roles):
 	return {
 		"settings": settings,
 		"employees": employees,
-		"employees_by_name": {employee.name: employee for employee in employees},
+		"employees_by_name": employees_by_name,
 		"by_dept": by_dept,
 		"excluded_reviewees": excluded_reviewees,
 		"excluded_reviewers": excluded_reviewers,
