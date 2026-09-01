@@ -178,8 +178,9 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		self.assertTrue(person["cannot_be_rated"])
 		self.assertTrue(any(row["reviewer"] == "EMP-011" for row in result["load"]))
 
+	@patch("survey_app.survey_cycle.resolve_org_roles", return_value={"md": None, "team_leaders": [], "warnings": []})
 	@patch("survey_app.survey_cycle.frappe")
-	def test_purge_excluded_pairs_removes_only_planned(self, frappe_api):
+	def test_purge_excluded_pairs_removes_only_planned(self, frappe_api, _resolve_org_roles):
 		frappe_api._dict.side_effect = frappe._dict
 		cycle_doc = frappe._dict(
 			name="SCY-2026-00001",

@@ -886,11 +886,24 @@ def preview_cycle_assignments(cycle=None):
 				"or being rated. Remove them from the plan or rebuild the cycle to apply exclusions."
 			)
 
-	md_row = roles.get("md")
-	md_name = md_row["name"] if md_row else None
+	employee_names = sorted(
+		{p.get("reviewer") for p in pairs if p.get("reviewer")}
+		| {p.get("reviewee") for p in pairs if p.get("reviewee")}
+	)
+	employee_rows = []
+	if employee_names:
+		employee_rows = frappe.get_all(
+			"Employee",
+			filters={"name": ["in", employee_names]},
+			fields=["name", "employee_name", "department"],
+		)
+	employees = {e.name: e for e in employee_rows}
+
 	exco_map = _exco_oversight(settings)
 	exco_conflicts = None
 	if source == "cycle" and exco_map:
+		md_row = roles.get("md")
+		md_name = md_row["name"] if md_row else None
 		dept_by_employee = {e.name: e.department for e in employee_rows}
 		exco_employees = {name for name in exco_map if name in dept_by_employee}
 		exco_conflict_pairs = [
@@ -925,19 +938,6 @@ def preview_cycle_assignments(cycle=None):
 				f"{len(exco_conflict_pairs)} stored pair(s) fall outside the EXCO review circle "
 				"(supervised team, EXCO peers, and the MD only). Purge them or rebuild the cycle."
 			)
-
-	employee_names = sorted(
-		{p.get("reviewer") for p in pairs if p.get("reviewer")}
-		| {p.get("reviewee") for p in pairs if p.get("reviewee")}
-	)
-	employee_rows = []
-	if employee_names:
-		employee_rows = frappe.get_all(
-			"Employee",
-			filters={"name": ["in", employee_names]},
-			fields=["name", "employee_name", "department"],
-		)
-	employees = {e.name: e for e in employee_rows}
 
 	excluded_people = []
 	if excluded_reviewees or excluded_reviewers:
