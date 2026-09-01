@@ -1131,6 +1131,7 @@ def purge_excluded_pairs(cycle=None):
 	for pair in kept:
 		existing.add((pair.reviewer, pair.reviewee))
 	grafted = 0
+	graft_rows = []
 	if exco_map:
 		employees = _active_employees(exclude_names=excluded_reviewees)
 		employees_by_name = {e.name: e for e in employees}
@@ -1158,21 +1159,23 @@ def purge_excluded_pairs(cycle=None):
 				if (reviewer, reviewee) in existing:
 					continue
 				existing.add((reviewer, reviewee))
-				kept.append(
-					frappe._dict(
-						reviewer=reviewer,
-						reviewee=reviewee,
-						rule_type=rule_type,
-						status="Planned",
-						batch_no=0,
-						survey=None,
-					)
+				graft_rows.append(
+					{
+						"reviewer": reviewer,
+						"reviewee": reviewee,
+						"rule_type": rule_type,
+						"status": "Planned",
+						"batch_no": 0,
+						"survey": None,
+					}
 				)
 				grafted += 1
 
 	if removed or grafted:
 		doc.pairs = kept
-		doc.total_pairs = len(kept)
+		for row in graft_rows:
+			doc.append("pairs", row)
+		doc.total_pairs = len(doc.pairs)
 		doc.flags.ignore_permissions = True
 		doc.save()
 		frappe.db.commit()
@@ -1183,7 +1186,7 @@ def purge_excluded_pairs(cycle=None):
 		"exco_removed": exco_removed,
 		"grafted": grafted,
 		"kept_assigned_or_completed": skipped,
-		"remaining_pairs": len(kept),
+		"remaining_pairs": len(doc.pairs) if removed or grafted else len(kept),
 	}
 
 
