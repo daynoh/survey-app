@@ -315,3 +315,40 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		self.assertEqual(result["remaining_pairs"], 2)
 		cycle_doc.save.assert_called_once()
 		frappe_api.db.commit.assert_called_once()
+
+
+class TestCycleLoadBatchWindow(TestCase):
+	@patch("survey_app.survey_cycle._batches_remaining", return_value=4)
+	@patch("survey_app.survey_cycle._cycle_period", return_value=("2026-07-01", "2026-09-30"))
+	@patch("survey_app.survey_cycle.build_required_pairs")
+	@patch("survey_app.survey_cycle.resolve_org_roles")
+	@patch("survey_app.survey_cycle.frappe")
+	def test_load_preview_compresses_batches_to_calendar_window(
+		self,
+		frappe_api,
+		resolve_org_roles,
+		build_required_pairs,
+		_cycle_period,
+		_batches_remaining,
+	):
+		frappe_api._dict.side_effect = frappe._dict
+		frappe_api.get_doc.return_value = frappe._dict(
+			generation_frequency="Weekly",
+			completeness_cycle="Quarterly",
+		)
+		resolve_org_roles.return_value = {"warnings": []}
+		build_required_pairs.return_value = [
+			{"reviewer": "EMP-001", "reviewee": "EMP-002", "rule_type": "Peer"},
+		]
+		frappe_api.get_all.return_value = [
+			frappe._dict(name="EMP-001", employee_name="Alice", department="Finance"),
+			frappe._dict(name="EMP-002", employee_name="Bob", department="Finance"),
+		]
+
+		result = unwrap(preview_cycle_load)()
+
+		self.assertEqual(result["batches_total"], 13)
+		self.assertEqual(result["calendar_batches_left"], 4)
+		self.assertEqual(result["batches_in_cycle"], 4)
+		self.assertTrue(result["batch_window_note"])
+		self.assertIn("2026-09-30", result["batch_window_note"])

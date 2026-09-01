@@ -5,6 +5,7 @@ from unittest.mock import patch
 import frappe
 
 from survey_app import survey_cycle
+from survey_app.survey_cycle import _batches_remaining
 
 
 class TestCycleStrategies(TestCase):
@@ -227,3 +228,24 @@ class TestCycleStrategies(TestCase):
 			)
 		self.assertNotIn("X1", {pair["reviewee"] for pair in pairs})
 		self.assertIn("X1", {pair["reviewer"] for pair in pairs})
+
+
+class TestCalendarBatchPacing(TestCase):
+	def test_batches_remaining_counts_send_dates_inclusive(self):
+		# Sept 2 → Sept 30 inclusive = 29 days → ceil(29 / 7) = 5 weekly sends.
+		self.assertEqual(_batches_remaining("2026-09-30", "Weekly", as_of="2026-09-02"), 5)
+		# Sept 4 → Sept 30 inclusive = 27 days → 4 weekly sends.
+		self.assertEqual(_batches_remaining("2026-09-30", "Weekly", as_of="2026-09-04"), 4)
+
+	def test_batches_remaining_on_the_last_day_is_one(self):
+		self.assertEqual(_batches_remaining("2026-09-30", "Weekly", as_of="2026-09-30"), 1)
+
+	def test_batches_remaining_after_period_end_still_sends_once(self):
+		self.assertEqual(_batches_remaining("2026-09-01", "Weekly", as_of="2026-09-15"), 1)
+
+	def test_batches_remaining_respects_interval(self):
+		# Monthly interval = 30 days; Sept 1 → Dec 30 inclusive = 121 days → 5.
+		self.assertEqual(_batches_remaining("2026-12-30", "Monthly", as_of="2026-09-01"), 5)
+
+	def test_batches_remaining_without_end_date_defaults_to_one(self):
+		self.assertEqual(_batches_remaining(None, "Weekly", as_of="2026-09-02"), 1)

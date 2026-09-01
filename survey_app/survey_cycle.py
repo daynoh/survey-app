@@ -693,7 +693,15 @@ def preview_cycle_load(strategy=None):
 		cycle_key=f"{period_start}|{period_end}|{selected_strategy}",
 	)
 
-	batches = _batches_in_cycle(survey_freq, cycle)
+	batches_total = _batches_in_cycle(survey_freq, cycle)
+	calendar_batches_left = _batches_remaining(period_end, survey_freq)
+	batches = max(1, min(batches_total, calendar_batches_left))
+	batch_window_note = ""
+	if batches < batches_total:
+		batch_window_note = (
+			f"Cycle period ends {period_end}; about {batches} {survey_freq.lower()} send(s) "
+			"remain — per-batch quotas compress so everything is assigned before the period closes."
+		)
 	by_reviewer = defaultdict(int)
 	by_reviewee = defaultdict(int)
 	by_rule = defaultdict(int)
@@ -793,6 +801,9 @@ def preview_cycle_load(strategy=None):
 		"survey_frequency": survey_freq,
 		"completeness_cycle": cycle,
 		"batches_in_cycle": batches,
+		"batches_total": batches_total,
+		"calendar_batches_left": calendar_batches_left,
+		"batch_window_note": batch_window_note,
 		"min_surveys_per_batch": min_per,
 		"max_surveys_per_reviewer": cap,
 		"balanced_reviews_per_employee": balanced_target,
@@ -1166,6 +1177,21 @@ def _interval_days(interval):
 	return None
 
 
+def _batches_remaining(period_end, survey_freq, as_of=None):
+	"""Calendar-aware count of send dates left until the cycle period ends.
+
+	Returns at least 1 so an expired window still gets one final send. Used to
+	compress per-batch quotas when a cycle starts (or resumes) mid-period.
+	"""
+	interval_days = _interval_days(FREQUENCY_INTERVALS.get(survey_freq or "Weekly"))
+	if not interval_days or not period_end:
+		return 1
+	days_left = (getdate(period_end) - getdate(as_of or today())).days + 1  # inclusive of today
+	if days_left <= 0:
+		return 1
+	return max(1, math.ceil(days_left / interval_days))
+
+
 def _cycle_period(completeness_cycle, as_of=None):
 	as_of = getdate(as_of or today())
 	cycle = completeness_cycle or "Quarterly"
@@ -1412,7 +1438,15 @@ def run_cycle_batch(force=0, trigger_source="Manual"):
 		by_reviewer[p.reviewer].append(p)
 
 	batches_total = _batches_in_cycle(doc.survey_frequency or "Weekly", doc.completeness_cycle or "Quarterly")
-	batches_left = max(1, batches_total - cint(doc.current_batch))
+	# Compress to the send dates actually left before the period ends, so a cycle
+	# started (or resumed) mid-quarter still finishes everything by period_end.
+	batches_left = max(
+		1,
+		min(
+			batches_total - cint(doc.current_batch),
+			_batches_remaining(doc.period_end, doc.survey_frequency),
+		),
+	)
 	cap = cint(settings.max_surveys_per_reviewer) or 10
 	min_per = cint(getattr(settings, "min_surveys_per_batch", None)) or 3
 

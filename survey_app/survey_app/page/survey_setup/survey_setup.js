@@ -1114,6 +1114,9 @@ survey_app.SurveySetup = class SurveySetup {
 			data.minimum_reviews_received || 0,
 			data.maximum_reviews_received || 0
 		]) + '</p>';
+		if (data.batch_window_note) {
+			html += '<div class="alert alert-info">' + frappe.utils.escape_html(data.batch_window_note) + '</div>';
+		}
 		if ((data.warnings || []).length) {
 			html += '<div class="alert alert-warning">' + data.warnings.map(frappe.utils.escape_html).join('<br>') + '</div>';
 		}
