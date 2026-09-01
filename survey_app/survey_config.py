@@ -355,6 +355,7 @@ def save_scoring_settings(settings_data):
         doc.cc_hr_on_report = settings_data.get("cc_hr_on_report") or 0
 
     doc.save(ignore_permissions=True)
+    frappe.db.commit()
     return {"status": "saved"}
 
 
