@@ -431,6 +431,8 @@ class TestApplyRulesAndUnsentInvitations(TestCase):
 		frappe_api.db.get_value.return_value = "SCY-2026-00001"
 
 		def fake_get_value(doctype, name, fields=None, **kwargs):
+			if doctype == "Survey Cycle":
+				return "SCY-2026-00001"
 			if doctype == "Employee":
 				data = {
 					"EMP-010": frappe._dict(employee_name="Has User", user_id="has.user@x.com"),
@@ -472,6 +474,7 @@ class TestApplyRulesAndUnsentInvitations(TestCase):
 
 		frappe_api.db.get_value.side_effect = fake_get_value
 		frappe_api.db.exists.return_value = True
+		frappe_api.throw.side_effect = frappe.ValidationError
 
 		with self.assertRaises(frappe.ValidationError):
 			unwrap(resend_survey_invitation)("SURV-001", "EMP-011", "EMP-012", cycle="SCY-2026-00001")
@@ -483,6 +486,7 @@ class TestApplyRulesAndUnsentInvitations(TestCase):
 			return True
 
 		frappe_api.db.get_value.side_effect = fake_get_value_ok
+		frappe_api.throw.side_effect = None
 		result = unwrap(resend_survey_invitation)("SURV-001", "EMP-010", "EMP-012", cycle="SCY-2026-00001")
 		self.assertEqual(result["status"], "sent")
 		_send_notification.assert_called_once()
