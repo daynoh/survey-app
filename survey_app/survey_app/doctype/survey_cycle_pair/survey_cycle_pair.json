@@ -50,7 +50,7 @@
    "fieldtype": "Select",
    "in_list_view": 1,
    "label": "Rule Type",
-   "options": "TeamLeader\nPeer\nTL_to_MD\nNearness",
+   "options": "TeamLeader\nPeer\nTL_to_MD\nNearness\nExco Oversight\nExco Peer\nExco to MD",
    "reqd": 1
   },
   {
