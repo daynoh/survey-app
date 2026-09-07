@@ -1348,6 +1348,15 @@ survey_app.SurveySetup = class SurveySetup {
 										<div id="cycle-strategy-lock" class="small text-muted" style="margin-top:7px;text-align:center;"></div>
 									</div>
 								</div>
+								<div class="checkbox" style="margin:13px 0 0;padding-top:12px;border-top:1px solid #e2e6e9;">
+									<label>
+										<input type="checkbox" id="setting-hide-previous-cycle-data" ${settings.hide_previous_cycle_data === 0 || settings.hide_previous_cycle_data === '0' ? '' : 'checked'}>
+										<b>${__('Hide data outside the current cycle')}</b>
+									</label>
+									<p class="help-box small text-muted" style="margin:4px 0 0 20px;">
+										${__('Recommended while earlier surveys contain test data. Records are preserved and can be shown again by clearing this option and saving Automation.')}
+									</p>
+								</div>
 							</div>
 							<div class="checkbox">
 								<label>
@@ -1553,6 +1562,7 @@ survey_app.SurveySetup = class SurveySetup {
 				enable_scheduled_generation: enabled,
 				generation_frequency: freq,
 				generation_mode: me.tab_automation.find('#setting-gen-mode').val() || 'Cycle Matrix',
+				hide_previous_cycle_data: me.tab_automation.find('#setting-hide-previous-cycle-data').is(':checked') ? 1 : 0,
 				completeness_cycle: me.tab_automation.find('#setting-completeness').val() || 'Quarterly',
 				enable_scheduled_reports: reports_enabled,
 				report_frequency: report_freq,

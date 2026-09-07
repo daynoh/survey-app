@@ -8,6 +8,7 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 
 	var $main = $(page.main).css({ padding: '0', background: '#f3f5f7' });
 	var data = null;
+	var activeScope = null;
 
 	$main.html(`
 		<div class="sa-root">
@@ -51,6 +52,9 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 					<span class="sa-filter-label">${__('Category')}</span>
 					<select class="form-control input-sm" id="f-cat"><option value="">${__('All Categories')}</option></select>
 				</div>
+				<label class="sa-history-toggle" title="${__('Historical records are preserved; this only changes what the dashboard displays.')}">
+					<input type="checkbox" id="f-include-history"> ${__('Include earlier/test cycles')}
+				</label>
 				<button class="btn btn-default btn-sm" id="f-reset" title="${__('Reset Filters')}">
 					<i class="fa fa-refresh"></i> ${__('Reset')}
 				</button>
@@ -267,6 +271,8 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 			.sa-filters input[type="date"] { width: 140px; }
 			.sa-filters .date-range { display: flex; align-items: center; gap: 6px; }
 			.sa-filters select { width: 170px; }
+			.sa-history-toggle { height:30px; margin:0; display:flex; align-items:center; gap:6px; color:#5f6d79; font-size:11px; font-weight:600; white-space:nowrap; }
+			.sa-history-toggle input { margin:0; }
 			.sa-filters .preset-btn { font-weight: 500; padding: 5px 12px; font-size: 12px; }
 			.sa-filters .preset-btn.active,
 			.sa-filters .preset-btn.btn-primary {
@@ -497,7 +503,10 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 	function update_period_label() {
 		var from = $('#f-from').val();
 		var to = $('#f-to').val() || today;
-		var text = from
+		var currentCycle = activeScope && activeScope.history_hidden && activeScope.current_cycle;
+		var text = currentCycle
+			? (__('Current cycle only') + '<br><b>' + frappe.utils.escape_html(currentCycle.title || currentCycle.name) + '</b>')
+			: from
 			? (__('Reporting period') + '<br><b>' + frappe.utils.escape_html(from) + '</b> → <b>' + frappe.utils.escape_html(to) + '</b>')
 			: (__('Reporting period') + '<br><b>' + __('All time') + '</b> → <b>' + frappe.utils.escape_html(to) + '</b>');
 		$('#sa-period-label').html(text);
@@ -512,12 +521,18 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 		load_employees();
 		load_data();
 	});
-	$('#f-emp, #f-cat').on('change', function () { load_data(); });
+	$('#f-emp, #f-cat, #f-include-history').on('change', function () {
+		activeScope = null;
+		update_period_label();
+		load_data();
+	});
 	$('#f-reset').on('click', function () {
 		set_preset(90);
 		$('.preset-btn').removeClass('active btn-primary').addClass('btn-default');
 		$('.preset-btn[data-preset="90"]').addClass('active btn-primary').removeClass('btn-default');
 		$('#f-dept, #f-emp, #f-cat').val('');
+		$('#f-include-history').prop('checked', false);
+		activeScope = null;
 		update_period_label();
 		load_data();
 	});
@@ -531,7 +546,8 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 			to_date: $('#f-to').val() || undefined,
 			department: $('#f-dept').val() || undefined,
 			employee: $('#f-emp').val() || undefined,
-			category: $('#f-cat').val() || undefined
+			category: $('#f-cat').val() || undefined,
+			include_history: $('#f-include-history').is(':checked') ? 1 : 0
 		};
 		frappe.call({
 			method: 'survey_app.survey_analytics.get_analytics',
@@ -539,6 +555,9 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 			callback: function (r) {
 				if (!r.exc && r.message) {
 					data = r.message;
+					if (data.scope && data.scope.include_history && !$('#f-include-history').is(':checked')) {
+						$('#f-include-history').prop('checked', true);
+					}
 					render(data);
 				} else {
 					show_empty();
@@ -558,6 +577,8 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 	}
 
 	function render(d) {
+		activeScope = d.scope || null;
+		update_period_label();
 		populate_view_controls(d);
 		render_summary(d.summary || []);
 		render_insights(d.insights || {});

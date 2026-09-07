@@ -5,6 +5,7 @@ from frappe import _
 from frappe.utils import getdate, today
 
 from survey_app.performance import build_employee_scorecard
+from survey_app.cycle_scope import get_cycle_scope
 
 
 LEGACY_PERIOD_KEY = "__legacy__"
@@ -36,13 +37,22 @@ def get_my_dashboard(period_key=None, from_date=None, to_date=None):
 		return _empty_dashboard("inactive_employee", profile=profile)
 
 	activity_filter = _normalise_activity_filter(from_date, to_date)
+	scope = get_cycle_scope()
+	current_cycle = (scope.get("current_cycle") or {}).get("name")
+	current_cycle_only = bool(scope.get("history_hidden"))
 	assignments = _get_assignments(
 		frappe.session.user,
 		activity_filter["from_date"],
 		activity_filter["to_date"],
+		current_cycle=current_cycle,
+		current_cycle_only=current_cycle_only,
 	)
 	active_cycle = _get_active_cycle(employee.name)
-	periods = _get_result_periods(employee.name)
+	periods = _get_result_periods(
+		employee.name,
+		current_cycle=current_cycle,
+		current_cycle_only=current_cycle_only,
+	)
 	period_keys = {period["key"] for period in periods}
 
 	if period_key and period_key not in period_keys:
@@ -63,16 +73,25 @@ def get_my_dashboard(period_key=None, from_date=None, to_date=None):
 		"trend": trend,
 		"assignments": assignments,
 		"activity_filter": activity_filter,
+		"scope": scope,
 	}
 
 
-def _get_result_periods(employee):
+def _get_result_periods(employee, current_cycle=None, current_cycle_only=False):
 	periods = []
 	if frappe.db.exists("DocType", "Survey Cycle") and frappe.db.exists(
 		"DocType", "Survey Cycle Pair"
 	):
+		cycle_condition = ""
+		values = {"employee": employee}
+		if current_cycle_only:
+			if current_cycle:
+				cycle_condition = "AND sc.name = %(current_cycle)s"
+				values["current_cycle"] = current_cycle
+			else:
+				cycle_condition = "AND 1 = 0"
 		closed_cycles = frappe.db.sql(
-			"""
+			f"""
 			SELECT DISTINCT
 				sc.name,
 				sc.title,
@@ -85,9 +104,10 @@ def _get_result_periods(employee):
 				AND scp.parentfield = 'pairs'
 			WHERE sc.status = 'Closed'
 				AND scp.reviewee = %(employee)s
+				{cycle_condition}
 			ORDER BY sc.period_end DESC, sc.creation DESC
 			""",
-			{"employee": employee},
+			values,
 			as_dict=True,
 		)
 		periods.extend(
@@ -102,7 +122,7 @@ def _get_result_periods(employee):
 			for cycle in closed_cycles
 		)
 
-	legacy_bounds = _get_legacy_bounds(employee)
+	legacy_bounds = None if current_cycle_only else _get_legacy_bounds(employee)
 	if legacy_bounds:
 		periods.append(
 			{
@@ -301,9 +321,28 @@ def _normalise_activity_filter(from_date=None, to_date=None):
 	}
 
 
-def _get_assignments(user, from_date=None, to_date=None):
+def _get_assignments(
+	user,
+	from_date=None,
+	to_date=None,
+	current_cycle=None,
+	current_cycle_only=False,
+):
 	conditions = []
 	values = {"user": user}
+	cycle_join = ""
+	if current_cycle_only:
+		if current_cycle:
+			cycle_join = """
+			INNER JOIN `tabSurvey Cycle Pair` assignment_cycle_pair
+				ON assignment_cycle_pair.survey = s.name
+				AND assignment_cycle_pair.parenttype = 'Survey Cycle'
+				AND assignment_cycle_pair.parentfield = 'pairs'
+				AND assignment_cycle_pair.parent = %(current_cycle)s
+			"""
+			values["current_cycle"] = current_cycle
+		else:
+			conditions.append("1 = 0")
 	if from_date:
 		conditions.append(
 			"DATE(COALESCE(response.submission_date, s.creation)) >= %(activity_from_date)s"
@@ -326,6 +365,7 @@ def _get_assignments(user, from_date=None, to_date=None):
 			COALESCE(reviewee.department, '') AS department,
 			response.submission_date
 		FROM `tabSurvey` s
+		{cycle_join}
 		LEFT JOIN `tabEmployee` reviewee ON reviewee.name = s.employee_score
 		LEFT JOIN (
 			SELECT survey, MAX(submission_date) AS submission_date
@@ -379,6 +419,7 @@ def _empty_dashboard(state, profile=None):
 		"results": {"state": "empty"},
 		"trend": [],
 		"activity_filter": {"from_date": "", "to_date": "", "active": False},
+		"scope": {"include_history": False, "history_hidden": True, "current_cycle": None},
 		"assignments": {
 			"pending_count": 0,
 			"completed_count": 0,

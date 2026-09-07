@@ -22,6 +22,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt, cstr
 
+from survey_app.cycle_scope import get_cycle_scope
+
 
 def execute(filters=None):
     filters = filters or {}
@@ -172,6 +174,11 @@ FROM `tabSurvey Response` sr
 INNER JOIN `tabSurvey` s
     ON s.name = sr.survey
 
+LEFT JOIN `tabSurvey Cycle Pair` report_cycle_pair
+    ON report_cycle_pair.survey = s.name
+    AND report_cycle_pair.parenttype = 'Survey Cycle'
+    AND report_cycle_pair.parentfield = 'pairs'
+
 INNER JOIN `tabSurvey Response Answer` sra
     ON sra.parent = sr.name
 
@@ -318,6 +325,15 @@ ORDER BY
 def get_conditions(filters):
     conditions = ["sr.docstatus < 2"]
     values     = {}
+
+    scope = get_cycle_scope(filters.get("include_history"))
+    if scope.get("history_hidden"):
+        current_cycle = (scope.get("current_cycle") or {}).get("name")
+        if current_cycle:
+            conditions.append("report_cycle_pair.parent = %(current_cycle)s")
+            values["current_cycle"] = current_cycle
+        else:
+            conditions.append("1 = 0")
 
     if filters.get("from_date"):
         conditions.append("sr.submission_date >= %(from_date)s")

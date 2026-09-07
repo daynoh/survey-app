@@ -17,6 +17,7 @@
   "exclude_rating",
   "section_break_generation_mode",
   "generation_mode",
+  "hide_previous_cycle_data",
   "section_break_roles",
   "role_resolution_mode",
   "md_employee",
@@ -110,6 +111,13 @@
    "fieldtype": "Select",
    "label": "Generation Mode",
    "options": "Cycle Matrix\nLegacy Capped"
+  },
+  {
+   "default": "1",
+   "description": "When enabled, Survey Analytics, Outstanding Surveys, and My Surveys show only the current Survey Cycle by default. Existing historical records are preserved.",
+   "fieldname": "hide_previous_cycle_data",
+   "fieldtype": "Check",
+   "label": "Hide Data Outside Current Cycle"
   },
   {
    "fieldname": "section_break_roles",

@@ -28,9 +28,10 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 
 			<div class="os-toolbar">
 				<div class="os-filters">
-					<select class="form-control input-sm" id="os-cycle"><option value="">${__('All Cycles')}</option></select>
+					<select class="form-control input-sm" id="os-cycle" disabled><option value="">${__('Current Cycle')}</option></select>
 					<select class="form-control input-sm" id="os-dept"><option value="">${__('All Departments')}</option></select>
 					<input type="number" class="form-control input-sm" id="os-min-days" min="0" placeholder="${__('Min days pending')}" style="width:140px;">
+					<label class="os-history-toggle"><input type="checkbox" id="os-include-history"> ${__('Include earlier/test cycles')}</label>
 					<select class="form-control input-sm" id="os-sort">
 						<option value="days_pending:desc">${__('Sort: Days pending (high → low)')}</option>
 						<option value="days_pending:asc">${__('Sort: Days pending (low → high)')}</option>
@@ -80,6 +81,8 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 			}
 			.os-filters, .os-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
 			.os-filters select, .os-filters input { width:210px; }
+			.os-filters .os-history-toggle { margin:0; display:flex; align-items:center; gap:6px; color:#5f6d79; font-size:11px; font-weight:600; white-space:nowrap; }
+			.os-filters .os-history-toggle input { width:auto; margin:0; }
 			.os-body { padding:18px 20px 32px; display:flex; flex-direction:column; gap:16px; }
 			.os-panel {
 				background:#fff; border:1px solid #e2e8ee; border-radius:12px;
@@ -137,6 +140,11 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 
 	$('#os-refresh').on('click', load);
 	$('#os-cycle, #os-dept, #os-min-days, #os-sort').on('change', load);
+	$('#os-include-history').on('change', function () {
+		var includeHistory = $(this).is(':checked');
+		$('#os-cycle').val('').prop('disabled', !includeHistory);
+		load();
+	});
 
 	$('#os-groups').on('change', '.os-check-all-group', function () {
 		var groupId = $(this).data('group');
@@ -205,6 +213,7 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 	}
 
 	function load() {
+		var includeHistory = $('#os-include-history').is(':checked');
 		var sort = ($('#os-sort').val() || 'days_pending:desc').split(':');
 		state.sort_by = sort[0];
 		state.sort_order = sort[1] || 'desc';
@@ -220,9 +229,10 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 			method: 'survey_app.outstanding.get_outstanding_surveys',
 			args: {
 				filters: {
-					cycle: $('#os-cycle').val() || undefined,
+					cycle: includeHistory ? ($('#os-cycle').val() || undefined) : undefined,
 					department: $('#os-dept').val() || undefined,
-					min_days: $('#os-min-days').val() || undefined
+					min_days: $('#os-min-days').val() || undefined,
+					include_history: includeHistory ? 1 : 0
 				},
 				sort_by: state.sort_by,
 				sort_order: state.sort_order
@@ -234,17 +244,21 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 				}
 				state.rows = r.message.rows || [];
 				state.groups = r.message.groups || [];
-				populate_cycle_filter(r.message.cycles || []);
+				if (r.message.scope && r.message.scope.include_history && !includeHistory) {
+					$('#os-include-history').prop('checked', true);
+					$('#os-cycle').prop('disabled', false);
+				}
+				populate_cycle_filter(r.message.cycles || [], r.message.scope || {});
 				render_stats(r.message);
 				render_groups(state.groups);
 			}
 		});
 	}
 
-	function populate_cycle_filter(cycles) {
+	function populate_cycle_filter(cycles, scope) {
 		var $sel = $('#os-cycle');
 		var current = $sel.val() || '';
-		var html = '<option value="">' + __('All Cycles') + '</option>';
+		var html = '<option value="">' + (scope.history_hidden ? __('Current Cycle') : __('All Cycles')) + '</option>';
 		html += '<option value="__none__">' + __('No Cycle') + '</option>';
 		(cycles || []).forEach(function (c) {
 			var label = (c.title || c.name) +
@@ -374,7 +388,11 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 	function send_reminders(surveys, remind_all) {
 		frappe.call({
 			method: 'survey_app.outstanding.send_survey_reminders',
-			args: { surveys: surveys, remind_all: remind_all },
+			args: {
+				surveys: surveys,
+				remind_all: remind_all,
+				include_history: $('#os-include-history').is(':checked') ? 1 : 0
+			},
 			freeze: true,
 			freeze_message: __('Sending reminders...'),
 			callback: function (r) {

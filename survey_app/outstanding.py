@@ -2,6 +2,7 @@ import frappe
 from frappe.utils import get_url, now_datetime, getdate, date_diff, cint, formatdate, add_days, today
 
 from survey_app.permissions import survey_admin_required
+from survey_app.cycle_scope import get_cycle_scope
 
 
 @frappe.whitelist()
@@ -12,6 +13,7 @@ def get_outstanding_surveys(filters=None, sort_by="days_pending", sort_order="de
 		import json
 		filters = json.loads(filters)
 	filters = filters or {}
+	scope = get_cycle_scope(filters.get("include_history"))
 
 	conditions = [
 		"IFNULL(s.is_internal_scoring, 0) = 1",
@@ -62,6 +64,13 @@ def get_outstanding_surveys(filters=None, sort_by="days_pending", sort_order="de
 			else:
 				conditions.append("scp.parent = %(cycle)s")
 				values["cycle"] = filters["cycle"]
+		elif not scope.get("include_history"):
+			current_cycle = (scope.get("current_cycle") or {}).get("name")
+			if current_cycle:
+				conditions.append("scp.parent = %(current_cycle)s")
+				values["current_cycle"] = current_cycle
+			else:
+				conditions.append("1 = 0")
 
 	where_sql = " AND ".join(conditions)
 
@@ -164,6 +173,7 @@ def get_outstanding_surveys(filters=None, sort_by="days_pending", sort_order="de
 		"by_reviewer": reviewer_summary,
 		"sort_by": sort_key,
 		"sort_order": "desc" if reverse else "asc",
+		"scope": scope,
 	}
 
 
@@ -198,7 +208,7 @@ def _group_rows_by_cycle(rows):
 
 @frappe.whitelist()
 @survey_admin_required
-def send_survey_reminders(surveys=None, remind_all=0):
+def send_survey_reminders(surveys=None, remind_all=0, include_history=0):
 	"""Send reminder emails for one or more outstanding surveys."""
 	if isinstance(surveys, str):
 		import json
@@ -206,7 +216,7 @@ def send_survey_reminders(surveys=None, remind_all=0):
 
 	remind_all = cint(remind_all)
 	if remind_all:
-		data = get_outstanding_surveys()
+		data = get_outstanding_surveys(filters={"include_history": cint(include_history)})
 		surveys = [r["survey"] for r in data.get("rows") or []]
 
 	if not surveys:

@@ -4,6 +4,7 @@ from frappe.utils import now
 
 from survey_app.permissions import survey_admin_required
 from survey_app.surveys import sample_360_question_sections
+from survey_app.cycle_scope import get_cycle_scope, hide_previous_cycle_data
 
 
 @frappe.whitelist()
@@ -49,6 +50,7 @@ def get_config_data():
             "generation_frequency": doc.generation_frequency or "",
             "last_generation_date": str(doc.last_generation_date or ""),
             "generation_mode": getattr(doc, "generation_mode", None) or "Cycle Matrix",
+            "hide_previous_cycle_data": int(hide_previous_cycle_data()),
             "role_resolution_mode": getattr(doc, "role_resolution_mode", None) or "Hybrid",
             "md_employee": getattr(doc, "md_employee", None) or "",
             "team_leader_designations": getattr(doc, "team_leader_designations", None) or "",
@@ -319,6 +321,8 @@ def save_scoring_settings(settings_data):
 
     if "generation_mode" in settings_data:
         doc.generation_mode = settings_data.get("generation_mode") or "Cycle Matrix"
+    if "hide_previous_cycle_data" in settings_data:
+        doc.hide_previous_cycle_data = cint_safe(settings_data.get("hide_previous_cycle_data"), 1)
     if "role_resolution_mode" in settings_data:
         doc.role_resolution_mode = settings_data.get("role_resolution_mode") or "Hybrid"
     if "md_employee" in settings_data:
@@ -577,9 +581,34 @@ def cint_safe(val, default=0):
 
 @frappe.whitelist()
 @survey_admin_required
-def get_dashboard_stats():
-    total_surveys = frappe.db.count("Survey")
-    total_responses = frappe.db.count("Survey Response")
+def get_dashboard_stats(include_history=0):
+    scope = get_cycle_scope(include_history)
+    current_cycle = (scope.get("current_cycle") or {}).get("name")
+    if scope.get("history_hidden") and current_cycle:
+        counts = frappe.db.sql(
+            """
+            SELECT
+                COUNT(DISTINCT scp.survey) AS total_surveys,
+                COUNT(DISTINCT sr.name) AS total_responses
+            FROM `tabSurvey Cycle Pair` scp
+            LEFT JOIN `tabSurvey Response` sr
+                ON sr.survey = scp.survey AND sr.docstatus < 2
+            WHERE scp.parent = %(cycle)s
+                AND scp.parenttype = 'Survey Cycle'
+                AND scp.parentfield = 'pairs'
+                AND IFNULL(scp.survey, '') != ''
+            """,
+            {"cycle": current_cycle},
+            as_dict=True,
+        )[0]
+        total_surveys = counts.total_surveys or 0
+        total_responses = counts.total_responses or 0
+    elif scope.get("history_hidden"):
+        total_surveys = 0
+        total_responses = 0
+    else:
+        total_surveys = frappe.db.count("Survey")
+        total_responses = frappe.db.count("Survey Response")
 
     pending = total_surveys - total_responses
     completion_rate = round((total_responses / total_surveys * 100), 1) if total_surveys > 0 else 0
@@ -588,7 +617,22 @@ def get_dashboard_stats():
     questions_count = frappe.db.count("Value Questions")
     employees_count = frappe.db.count("Employee", {"status": "Active"})
 
-    top_scores = frappe.db.sql("""
+    cycle_join = ""
+    cycle_condition = ""
+    values = {}
+    if scope.get("history_hidden") and current_cycle:
+        cycle_join = """
+        INNER JOIN `tabSurvey Cycle Pair` dashboard_cycle_pair
+            ON dashboard_cycle_pair.survey = sr.survey
+            AND dashboard_cycle_pair.parenttype = 'Survey Cycle'
+            AND dashboard_cycle_pair.parentfield = 'pairs'
+        """
+        cycle_condition = "AND dashboard_cycle_pair.parent = %(current_cycle)s"
+        values["current_cycle"] = current_cycle
+    elif scope.get("history_hidden"):
+        cycle_condition = "AND 1 = 0"
+
+    top_scores = frappe.db.sql(f"""
         SELECT
             sr.survey,
             s.employee_score,
@@ -596,10 +640,12 @@ def get_dashboard_stats():
             s.title
         FROM `tabSurvey Response` sr
         JOIN `tabSurvey` s ON sr.survey = s.name
+        {cycle_join}
         WHERE sr.total_score > 0
+            {cycle_condition}
         ORDER BY sr.total_score DESC
         LIMIT 5
-    """, as_dict=True)
+    """, values, as_dict=True)
 
     return {
         "total_surveys": total_surveys,
@@ -609,7 +655,8 @@ def get_dashboard_stats():
         "categories_count": categories_count,
         "questions_count": questions_count,
         "employees_count": employees_count,
-        "top_scores": top_scores
+        "top_scores": top_scores,
+        "scope": scope,
     }
 
 

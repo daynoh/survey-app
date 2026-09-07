@@ -69,8 +69,17 @@ class TestMySurveysDashboard(FrappeTestCase):
 	@patch("survey_app.my_surveys._get_active_cycle")
 	@patch("survey_app.my_surveys._get_assignments")
 	@patch.object(frappe.db, "get_value")
+	@patch(
+		"survey_app.my_surveys.get_cycle_scope",
+		return_value={
+			"include_history": False,
+			"history_hidden": True,
+			"current_cycle": {"name": "SCY-CURRENT"},
+		},
+	)
 	def test_session_user_is_the_only_employee_lookup(
 		self,
+		_get_cycle_scope,
 		get_value,
 		get_assignments,
 		get_active_cycle,
@@ -110,9 +119,19 @@ class TestMySurveysDashboard(FrappeTestCase):
 			["name", "employee_name", "designation", "department", "image", "status"],
 			as_dict=True,
 		)
-		get_assignments.assert_called_once_with(user, "2026-07-01", "2026-07-31")
+		get_assignments.assert_called_once_with(
+			user,
+			"2026-07-01",
+			"2026-07-31",
+			current_cycle="SCY-CURRENT",
+			current_cycle_only=True,
+		)
 		get_active_cycle.assert_called_once_with("EMP-PRIVATE")
-		get_result_periods.assert_called_once_with("EMP-PRIVATE")
+		get_result_periods.assert_called_once_with(
+			"EMP-PRIVATE",
+			current_cycle="SCY-CURRENT",
+			current_cycle_only=True,
+		)
 		self.assertEqual(result["profile"]["employee_name"], "Private Employee")
 		self.assertNotIn("name", result["profile"])
 		self.assertEqual(result["activity_filter"]["from_date"], "2026-07-01")
@@ -121,8 +140,17 @@ class TestMySurveysDashboard(FrappeTestCase):
 	@patch("survey_app.my_surveys._get_active_cycle", return_value=None)
 	@patch("survey_app.my_surveys._get_assignments")
 	@patch.object(frappe.db, "get_value")
+	@patch(
+		"survey_app.my_surveys.get_cycle_scope",
+		return_value={
+			"include_history": False,
+			"history_hidden": True,
+			"current_cycle": {"name": "SCY-CURRENT"},
+		},
+	)
 	def test_foreign_or_unknown_period_is_rejected(
 		self,
+		_get_cycle_scope,
 		get_value,
 		get_assignments,
 		_get_active_cycle,

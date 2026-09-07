@@ -289,7 +289,7 @@ receive a safe inactive-profile state.
 The employee dashboard provides:
 
 - Identity, designation, department, and active-cycle context
-- Released-period selector for closed Survey Cycles and legacy Earlier Surveys
+- Released-period selector for closed Survey Cycles and, when HR enables history, legacy Earlier Surveys
 - Overall score, prior-cycle change, organisation percentile, anonymous
   organisation average, and reviews received
 - Competency score bars with organisation-average markers
@@ -308,8 +308,15 @@ The employee dashboard provides:
 - Trends use released periods only and compare a closed cycle with the
   preceding closed cycle.
 - Legacy responses that are not associated with a cycle appear under
-  **Earlier Surveys**.
+  **Earlier Surveys** only when historical data visibility is enabled.
 - Activity date filters affect the task lists, not released score boundaries.
+
+### Hiding earlier test data
+
+- **Hide data outside the current cycle** is enabled by default in **Survey Setup → Automation & Cycle**.
+- While enabled, Survey Analytics, the Employee 360 Degree Survey report and exports, Outstanding Surveys, My Surveys results, and employee assignment history are restricted server-side to the active cycle (or the newest cycle when none is active).
+- HR can temporarily inspect earlier/test cycles from the **Include earlier/test cycles** control on Analytics and Outstanding Surveys.
+- Clearing the global setting and saving Automation restores historical periods for employees. No Survey, Survey Response, cycle, or log records are deleted.
 
 ---
 

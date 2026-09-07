@@ -3,6 +3,7 @@ from frappe.utils import flt, cstr
 from datetime import datetime, timedelta
 
 from survey_app.permissions import survey_admin_required
+from survey_app.cycle_scope import get_cycle_scope
 
 
 @frappe.whitelist()
@@ -38,7 +39,8 @@ def get_analytics(filters=None):
         filters = json.loads(filters)
     filters = filters or {}
 
-    conditions, values = build_conditions(filters)
+    scope = get_cycle_scope(filters.get("include_history"))
+    conditions, values = build_conditions(filters, scope=scope)
     raw = get_raw_data(conditions, values)
 
     empty_chart = {"labels": [], "values": []}
@@ -67,6 +69,7 @@ def get_analytics(filters=None):
             },
             "detail": [],
             "categories": [],
+            "scope": scope,
         }
 
     # Aggregate
@@ -77,7 +80,7 @@ def get_analytics(filters=None):
     competency_by_department = build_competency_by_department(aggregated)
 
     return {
-        "summary": build_summary(aggregated, filters),
+        "summary": build_summary(aggregated, filters, scope=scope),
         "insights": build_insights(aggregated),
         "by_employee": build_by_employee(aggregated),
         "by_category": build_by_category(aggregated),
@@ -89,12 +92,22 @@ def get_analytics(filters=None):
         "scorecard": scorecard,
         "detail": detail,
         "categories": scorecard.get("categories") or [],
+        "scope": scope,
     }
 
 
-def build_conditions(filters):
+def build_conditions(filters, scope=None):
     conditions = ["sr.docstatus < 2"]
     values = {}
+
+    scope = scope or get_cycle_scope(filters.get("include_history"))
+    if not scope.get("include_history"):
+        current_cycle = (scope.get("current_cycle") or {}).get("name")
+        if current_cycle:
+            conditions.append("scope_cycle_pair.parent = %(current_cycle)s")
+            values["current_cycle"] = current_cycle
+        else:
+            conditions.append("1 = 0")
 
     if filters.get("from_date"):
         conditions.append("sr.submission_date >= %(from_date)s")
@@ -139,6 +152,10 @@ SELECT
     emp.employee_name AS employee_name_raw
 FROM `tabSurvey Response` sr
 INNER JOIN `tabSurvey` s ON s.name = sr.survey
+LEFT JOIN `tabSurvey Cycle Pair` scope_cycle_pair
+    ON scope_cycle_pair.survey = s.name
+    AND scope_cycle_pair.parenttype = 'Survey Cycle'
+    AND scope_cycle_pair.parentfield = 'pairs'
 INNER JOIN `tabSurvey Response Answer` sra ON sra.parent = sr.name
 INNER JOIN `tabSurvey Response Selection` srs ON srs.parent = sra.name
 LEFT JOIN `tabSurvey Question Options` row_opt ON row_opt.name = srs.row_option
@@ -193,7 +210,7 @@ def aggregate_data(raw):
     return employees
 
 
-def build_summary(aggregated, filters=None):
+def build_summary(aggregated, filters=None, scope=None):
     filters = filters or {}
     total_emp = len(aggregated)
     total_responses = sum(len(e["response_ids"]) for e in aggregated.values())
@@ -204,8 +221,25 @@ def build_summary(aggregated, filters=None):
     avg_pct = round((total_score / total_max * 100), 1) if total_max else 0
 
     # Open surveys in period (for completion context)
-    survey_filters = {"docstatus": ["<", 2]}
-    open_surveys = frappe.db.count("Survey", survey_filters) or 0
+    scope = scope or get_cycle_scope((filters or {}).get("include_history"))
+    current_cycle = (scope.get("current_cycle") or {}).get("name")
+    if not scope.get("include_history") and current_cycle:
+        open_surveys = frappe.db.sql(
+            """
+            SELECT COUNT(DISTINCT survey)
+            FROM `tabSurvey Cycle Pair`
+            WHERE parent = %(cycle)s
+                AND parenttype = 'Survey Cycle'
+                AND parentfield = 'pairs'
+                AND IFNULL(survey, '') != ''
+            """,
+            {"cycle": current_cycle},
+        )[0][0] or 0
+    elif not scope.get("include_history"):
+        open_surveys = 0
+    else:
+        survey_filters = {"docstatus": ["<", 2]}
+        open_surveys = frappe.db.count("Survey", survey_filters) or 0
     completion_rate = round((total_responses / open_surveys * 100), 1) if open_surveys else 0
 
     return [
