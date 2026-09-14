@@ -129,6 +129,13 @@ website_route_rules = [
 #	"Event": "frappe.desk.doctype.event.event.has_permission",
 # }
 
+# Keep desk lists inside the visible cycle scope: legacy/test surveys and,
+# when configured, previous cycles are hidden.
+permission_query_conditions = {
+	"Survey": "survey_app.cycle_scope.survey_list_conditions",
+	"Survey Response": "survey_app.cycle_scope.survey_response_list_conditions",
+}
+
 # DocType Class
 # ---------------
 # Override standard doctype classes

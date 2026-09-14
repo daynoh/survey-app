@@ -106,11 +106,11 @@
   },
   {
    "default": "Cycle Matrix",
-   "description": "Cycle Matrix plans required pairs (Team Leader, peers, MD, nearness). Legacy Capped keeps the older random load-balanced generator.",
+   "description": "Cycle Matrix plans required pairs (Team Leader, peers, MD, nearness, EXCO). Legacy Capped generation is retired.",
    "fieldname": "generation_mode",
    "fieldtype": "Select",
    "label": "Generation Mode",
-   "options": "Cycle Matrix\nLegacy Capped"
+   "options": "Cycle Matrix"
   },
   {
    "default": "1",
@@ -154,7 +154,7 @@
    "description": "EXCO members are removed from generic peer/nearness assignment. Each one only reviews, and is only reviewed by, the department they oversee, other EXCO members, and the MD.",
    "fieldname": "exco_oversight",
    "fieldtype": "Table",
-   "label": "EXCO Oversight (Member → Department Overseen)",
+   "label": "EXCO Oversight (Member \u2192 Department Overseen)",
    "options": "Survey Exco Oversight"
   },
   {

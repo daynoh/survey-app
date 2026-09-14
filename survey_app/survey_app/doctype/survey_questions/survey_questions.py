@@ -18,6 +18,13 @@ class SurveyQuestions(Document):
 def get_survey_json(survey_name):
 
     doc = frappe.get_doc("Survey", survey_name)
+
+    from survey_app.cycle_scope import get_current_cycle
+
+    current = get_current_cycle()
+    if not current or (doc.cycle or "") != current["name"]:
+        frappe.throw("This survey is no longer available.")
+
     pages_dict = defaultdict(list)
 
     # -------------------------------------------------
@@ -132,10 +139,14 @@ def get_survey_json(survey_name):
             "elements": pages_dict[page_no]
         })
 
+    completed = bool(
+        frappe.db.exists("Survey Response", {"survey": survey_name, "docstatus": ["<", 2]})
+    )
     return {
         "showProgressBar": "bottom",
         "firstPageIsStarted": True,
         "startSurveyText": "Start Survey",
+        "completed": completed,
         "pages": pages
     }
 
@@ -174,6 +185,15 @@ def submit_survey(survey_id, response_data):
 
         survey_doc = frappe.get_doc("Survey", survey_id)
         user = frappe.session.user if frappe.session.user != "Guest" else None
+
+        # Only the current cycle's surveys can be answered, and only once.
+        from survey_app.cycle_scope import get_current_cycle
+
+        current = get_current_cycle()
+        if not current or (survey_doc.cycle or "") != current["name"]:
+            frappe.throw("This survey is no longer available.")
+        if frappe.db.exists("Survey Response", {"survey": survey_id, "docstatus": ["<", 2]}):
+            frappe.throw("This survey has already been submitted.")
 
         # ========== BUILD LOOKUP SETS ==========
         try:
@@ -328,6 +348,19 @@ def submit_survey(survey_id, response_data):
         except Exception as e:
             frappe.logger().error(f"Error inserting response document: {frappe.get_traceback()}")
             frappe.throw(f"Failed to save survey response: {str(e)}")
+
+        # Reflect completion on the owning cycle immediately (pair status,
+        # completion %, outstanding and unsent lists).
+        if survey_doc.cycle:
+            try:
+                from survey_app.survey_cycle import refresh_cycle_stats
+
+                refresh_cycle_stats(survey_doc.cycle)
+            except Exception:
+                frappe.log_error(
+                    title="Cycle refresh after survey submit failed",
+                    message=frappe.get_traceback(),
+                )
 
         # ========== INSERT SELECTIONS AFTER PARENT ==========
         selection_count = 0

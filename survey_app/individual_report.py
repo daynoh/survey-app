@@ -577,7 +577,7 @@ def get_manager_team(manager_employee):
 
 
 def _build_people_rows(employees, period_start, period_end, cycle=None):
-	org = _org_benchmarks(period_start, period_end)
+	org = _org_benchmarks(period_start, period_end, cycle=cycle)
 	team_rows = []
 	scores_for_avg = []
 	for te in employees:
@@ -610,7 +610,7 @@ def _build_people_rows(employees, period_start, period_end, cycle=None):
 def _build_department_team_summaries(period_start, period_end, cycle=None):
 	"""One summary per Team Leader × department assignment (for HR team ranking)."""
 	roles = resolve_org_roles()
-	org = _org_benchmarks(period_start, period_end)
+	org = _org_benchmarks(period_start, period_end, cycle=cycle)
 	teams = []
 	for t in roles.get("team_leaders") or []:
 		dept = t.get("department")
@@ -643,7 +643,7 @@ def _build_leadership_summaries(period_start, period_end, cycle=None):
 	"""Unique Team Leaders with individual score + aggregated team performance (for MD)."""
 	roles = resolve_org_roles()
 	md = _role_employee_id(roles.get("md"))
-	org = _org_benchmarks(period_start, period_end)
+	org = _org_benchmarks(period_start, period_end, cycle=cycle)
 	by_mgr = {}
 	for t in roles.get("team_leaders") or []:
 		emp = t.get("employee")

@@ -181,6 +181,14 @@ def get_auto_generation_status():
 @frappe.whitelist()
 @survey_admin_required
 def generate_capped_surveys(trigger_source="Manual", frequency=None):
+    from survey_app.cycle_scope import get_current_cycle
+
+    if get_current_cycle():
+        frappe.throw(
+            "Legacy capped generation is retired while a survey cycle exists. "
+            "Use the cycle batches from Survey Setup instead."
+        )
+
     settings = frappe.get_doc("Value Scoring Settings")
     frequency = frequency or settings.generation_frequency or ""
 

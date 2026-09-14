@@ -18,7 +18,17 @@ def get_outstanding_surveys(filters=None, sort_by="days_pending", sort_order="de
 	conditions = [
 		"IFNULL(s.is_internal_scoring, 0) = 1",
 		"IFNULL(s.rated_by, '') != ''",
-		"sr.name IS NULL",
+		# Pair-aware completion: the review counts as done when the same reviewer
+		# already submitted a non-cancelled response for the same reviewee on any
+		# equivalent survey (duplicate/legacy twins must not resurface here).
+		"""NOT EXISTS (
+			SELECT 1
+			FROM `tabSurvey Response` rsr
+			INNER JOIN `tabSurvey` rs ON rs.name = rsr.survey
+			WHERE IFNULL(rsr.docstatus, 0) < 2
+			  AND rs.rated_by = s.rated_by
+			  AND IFNULL(rs.employee_score, '') = IFNULL(s.employee_score, '')
+		)""",
 	]
 	values = {}
 
@@ -89,8 +99,6 @@ def get_outstanding_surveys(filters=None, sort_by="days_pending", sort_order="de
 			DATEDIFF(%(as_of)s, DATE(s.creation)) AS days_pending
 			{cycle_select}
 		FROM `tabSurvey` s
-		LEFT JOIN `tabSurvey Response` sr
-			ON sr.survey = s.name AND IFNULL(sr.docstatus, 0) < 2
 		LEFT JOIN `tabUser` u ON u.name = s.rated_by
 		LEFT JOIN `tabEmployee` reviewer ON reviewer.user_id = s.rated_by
 		LEFT JOIN `tabEmployee` reviewee ON reviewee.name = s.employee_score
@@ -208,15 +216,21 @@ def _group_rows_by_cycle(rows):
 
 @frappe.whitelist()
 @survey_admin_required
-def send_survey_reminders(surveys=None, remind_all=0, include_history=0):
+def send_survey_reminders(surveys=None, remind_all=0, include_history=0, filters=None):
 	"""Send reminder emails for one or more outstanding surveys."""
 	if isinstance(surveys, str):
 		import json
 		surveys = json.loads(surveys)
+	if isinstance(filters, str):
+		import json
+		filters = json.loads(filters)
 
 	remind_all = cint(remind_all)
 	if remind_all:
-		data = get_outstanding_surveys(filters={"include_history": cint(include_history)})
+		# Remind exactly the set the page is showing: forward its filters.
+		merged_filters = dict(filters or {})
+		merged_filters["include_history"] = cint(include_history)
+		data = get_outstanding_surveys(filters=merged_filters)
 		surveys = [r["survey"] for r in data.get("rows") or []]
 
 	if not surveys:
@@ -250,11 +264,24 @@ def _send_one_reminder(survey_name):
 	if not frappe.db.exists("Survey", survey_name):
 		return {"survey": survey_name, "status": "missing"}
 
-	# Already completed?
-	if frappe.db.exists("Survey Response", {"survey": survey_name}):
+	survey = frappe.get_doc("Survey", survey_name)
+
+	# Already completed? Pair-aware: any non-cancelled response by the same
+	# reviewer for the same reviewee counts, including duplicate/legacy twins.
+	if frappe.db.sql(
+		"""
+		SELECT 1
+		FROM `tabSurvey Response` sr
+		INNER JOIN `tabSurvey` s2 ON s2.name = sr.survey
+		WHERE IFNULL(sr.docstatus, 0) < 2
+		  AND s2.rated_by = %(reviewer)s
+		  AND IFNULL(s2.employee_score, '') = IFNULL(%(reviewee)s, '')
+		LIMIT 1
+		""",
+		{"reviewer": survey.rated_by, "reviewee": survey.employee_score or ""},
+	):
 		return {"survey": survey_name, "status": "already_completed"}
 
-	survey = frappe.get_doc("Survey", survey_name)
 	reviewer_user = survey.rated_by
 	if not reviewer_user:
 		return {"survey": survey_name, "status": "no_reviewer"}

@@ -1326,7 +1326,6 @@ survey_app.SurveySetup = class SurveySetup {
 								<label>${__('Generation Mode')}</label>
 								<select class="form-control" id="setting-gen-mode">
 									<option value="Cycle Matrix">${__('Cycle Matrix')} (${__('recommended')})</option>
-									<option value="Legacy Capped">${__('Legacy Capped')}</option>
 								</select>
 							</div>
 							<div id="cycle-strategy-panel" style="border:1px solid #d1d8dd;border-radius:8px;padding:14px 16px;margin:12px 0 18px;background:#f8fafc;">
@@ -2288,9 +2287,6 @@ survey_app.SurveySetup = class SurveySetup {
 								<button class="btn btn-default" id="preview-surveys-btn">
 									<i class="fa fa-eye"></i> ${__('Preview')}
 								</button>
-								<button class="btn btn-primary" id="generate-surveys-btn">
-									<i class="fa fa-play"></i> ${__('Generate Surveys')}
-								</button>
 							</div>
 							<div id="generate-result" style="margin-top:20px;"></div>
 						</div>
@@ -2369,49 +2365,8 @@ survey_app.SurveySetup = class SurveySetup {
 				}
 			});
 		});
-
-		this.tab_generate.find('#generate-surveys-btn').on('click', function() {
-			frappe.confirm(
-				__('This will generate 360-degree surveys for all active employees based on current settings. Continue?'),
-				function() {
-					frappe.call({
-						method: 'survey_app.surveys.generate_capped_surveys',
-						args: { trigger_source: 'Manual' },
-						freeze: true,
-						freeze_message: __('Generating surveys...'),
-						callback: function(r) {
-							if (!r.exc) {
-								var msg = __('Surveys generated successfully!');
-								var log_link = '';
-								if (r.message && typeof r.message === 'object') {
-									if (r.message.created != null) {
-										msg = __('Created {0} surveys.', [r.message.created]);
-									} else if (r.message.count != null) {
-										msg = __('Created {0} surveys.', [r.message.count]);
-									}
-									if (r.message.log) {
-										log_link = ' <a href="/app/survey-generation-log/' + encodeURIComponent(r.message.log) + '">' +
-											__('View Generation Log') + '</a>';
-									}
-								}
-								me.tab_generate.find('#generate-result').html(
-									'<div class="alert alert-success">' + msg +
-									' <a href="/app/survey">' + __('View Survey List') + '</a>' +
-									log_link + '</div>'
-								);
-								me.load_data();
-								me.switch_tab('trail');
-							} else {
-								me.tab_generate.find('#generate-result').html(
-									'<div class="alert alert-danger">' + __('Generation failed. Check error logs.') + '</div>'
-								);
-							}
-						}
-					});
-				}
-			);
-		});
 	}
+
 
 	// ============================================================
 	// TAB 5: Generation Trail

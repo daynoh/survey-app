@@ -1206,6 +1206,8 @@ def get_unsent_invitations(cycle=None):
 	for pair in doc.pairs or []:
 		if pair.status != "Assigned" or not pair.survey or pair.survey in invited:
 			continue
+		if frappe.db.exists("Survey Response", {"survey": pair.survey, "docstatus": ["<", 2]}):
+			continue
 		reviewer_row = frappe.db.get_value(
 			"Employee", pair.reviewer, ["employee_name", "user_id"], as_dict=True
 		)
@@ -1503,7 +1505,7 @@ def refresh_cycle_stats(doc):
 	assigned = 0
 	completed = 0
 	for p in doc.pairs or []:
-		if p.survey and frappe.db.exists("Survey Response", {"survey": p.survey}):
+		if p.survey and frappe.db.exists("Survey Response", {"survey": p.survey, "docstatus": ["<", 2]}):
 			if p.status != "Completed":
 				p.status = "Completed"
 				changed = True
@@ -1595,6 +1597,7 @@ def run_cycle_batch(force=0, trigger_source="Manual"):
 			p.survey = survey_name
 			p.status = "Assigned"
 			p.batch_no = batch_no
+			frappe.db.set_value("Survey", survey_name, "cycle", doc.name, update_modified=False)
 			notify = send_survey_notification_and_task(
 				survey_name,
 				sender_employee=p.reviewer,

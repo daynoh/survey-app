@@ -83,3 +83,31 @@ def get_cycle_scope(include_history=0):
 		"history_hidden": not include_history,
 		"current_cycle": get_current_cycle(),
 	}
+
+
+def _scoped_cycle_sql(table):
+	"""WHERE fragment limiting rows to the visible cycle scope.
+
+	Legacy surveys (no cycle link) are always hidden. When previous-cycle data
+	is hidden, only the current cycle is visible; otherwise past cycles show
+	but legacy/test rows never do.
+	"""
+	current = get_current_cycle()
+	if hide_previous_cycle_data():
+		if not current:
+			return "1 = 0"
+		return f"`{table}`.`cycle` = {frappe.db.escape(current['name'])}"
+	return f"IFNULL(`{table}`.`cycle`, '') != ''"
+
+
+def survey_list_conditions(user=None, doctype=None):
+	"""Desk list scoping for Survey: current cycle only by default."""
+	return _scoped_cycle_sql("tabSurvey")
+
+
+def survey_response_list_conditions(user=None, doctype=None):
+	"""Desk list scoping for Survey Response via its survey's cycle."""
+	return (
+		"`tabSurvey Response`.`survey` IN "
+		f"(SELECT `name` FROM `tabSurvey` WHERE {_scoped_cycle_sql('tabSurvey')})"
+	)

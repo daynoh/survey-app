@@ -429,6 +429,7 @@ class TestApplyRulesAndUnsentInvitations(TestCase):
 
 		frappe_api.get_doc.side_effect = fake_get_doc
 		frappe_api.db.get_value.return_value = "SCY-2026-00001"
+		frappe_api.db.exists.return_value = False
 
 		def fake_get_value(doctype, name, fields=None, **kwargs):
 			if doctype == "Survey Cycle":

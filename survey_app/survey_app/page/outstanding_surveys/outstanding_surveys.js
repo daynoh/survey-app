@@ -386,12 +386,19 @@ frappe.pages['outstanding-surveys'].on_page_load = function (wrapper) {
 	}
 
 	function send_reminders(surveys, remind_all) {
+		var includeHistory = $('#os-include-history').is(':checked');
 		frappe.call({
 			method: 'survey_app.outstanding.send_survey_reminders',
 			args: {
 				surveys: surveys,
 				remind_all: remind_all,
-				include_history: $('#os-include-history').is(':checked') ? 1 : 0
+				include_history: includeHistory ? 1 : 0,
+				// Remind All must target exactly the filtered set on screen.
+				filters: {
+					cycle: includeHistory ? ($('#os-cycle').val() || undefined) : undefined,
+					department: $('#os-dept').val() || undefined,
+					min_days: $('#os-min-days').val() || undefined
+				}
 			},
 			freeze: true,
 			freeze_message: __('Sending reminders...'),

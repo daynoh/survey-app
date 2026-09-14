@@ -11,6 +11,7 @@
   "is_internal_scoring",
   "employee_score",
   "rated_by",
+  "cycle",
   "single_response"
  ],
  "fields": [
@@ -50,6 +51,15 @@
    "fieldtype": "Link",
    "label": "Rated By",
    "options": "User"
+  },
+  {
+   "fieldname": "cycle",
+   "fieldtype": "Link",
+   "hidden": 1,
+   "in_list_view": 1,
+   "label": "Survey Cycle",
+   "options": "Survey Cycle",
+   "read_only": 1
   },
   {
    "default": "0",

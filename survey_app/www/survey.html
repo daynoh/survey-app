@@ -46,8 +46,23 @@
             fetch('/api/method/survey_app.survey_app.doctype.survey_questions.survey_questions.get_survey_json?survey_name=' + encodeURIComponent(surveyId))
                 .then(function(r) { return r.json(); })
                 .then(function(data) {
+                    if (data.exc_type || (data._server_messages && !data.message)) {
+                        var reason = 'This survey is no longer available.';
+                        try {
+                            var server = JSON.parse(data._server_messages || '[]');
+                            if (server.length) {
+                                reason = (JSON.parse(server[0]).message || reason).replace(/<[^>]*>/g, '');
+                            }
+                        } catch (e) { /* keep default reason */ }
+                        $('#surveyElement').html('<div class="error"><h2>Survey unavailable</h2><p>' + reason + '</p></div>');
+                        return;
+                    }
                     if (!data.message || !data.message.pages) {
                         $('#surveyElement').html('<div class="error"><h2>Survey not found</h2><p>The survey may have been deleted or is not available.</p></div>');
+                        return;
+                    }
+                    if (data.message.completed) {
+                        $('#surveyElement').html('<div class="loading" style="color:green"><h2>Already submitted</h2><p>You have already completed this survey — thank you. Your previous answers were saved.</p></div>');
                         return;
                     }
 
@@ -69,7 +84,14 @@
                                 } else if (res.message && res.message.status === 'completed_with_errors') {
                                     $('#surveyElement').html('<div class="loading" style="color:orange"><h2>Submitted with warnings</h2><p>' + (res.message.message || 'Some answers could not be saved.') + '</p></div>');
                                 } else if (res.exc_type) {
-                                    $('#surveyElement').html('<div class="error"><h2>Submission failed</h2><p>' + (res.exc_type || 'Server error') + ': ' + (res._server_messages || '') + '</p></div>');
+                                    var serverMsg = '';
+                                    try {
+                                        var msgs = JSON.parse(res._server_messages || '[]');
+                                        if (msgs.length) {
+                                            serverMsg = (JSON.parse(msgs[0]).message || '').replace(/<[^>]*>/g, '');
+                                        }
+                                    } catch (e) { /* fall through */ }
+                                    $('#surveyElement').html('<div class="error"><h2>Submission failed</h2><p>' + (serverMsg || res.exc_type || 'Server error') + '</p></div>');
                                 } else {
                                     $('#surveyElement').html('<div class="error"><h2>Submission failed</h2><p>' + ((res.message && res.message.message) || JSON.stringify(res).substring(0, 300) || 'Please try again.') + '</p></div>');
                                 }
