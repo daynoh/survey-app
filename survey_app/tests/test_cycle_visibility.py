@@ -102,34 +102,40 @@ class TestCurrentCycleVisibility(TestCase):
 
 
 class TestListScopingAndSubmissionGuards(TestCase):
+	@patch("survey_app.cycle_scope.frappe")
 	@patch("survey_app.cycle_scope.hide_previous_cycle_data", return_value=True)
 	@patch("survey_app.cycle_scope.get_current_cycle", return_value={"name": "SCY-CURRENT"})
-	def test_survey_list_scopes_to_current_cycle_when_history_hidden(self, _current, _hide):
+	def test_survey_list_scopes_to_current_cycle_when_history_hidden(self, _current, _hide, frappe_api):
 		from survey_app import cycle_scope
 
+		frappe_api.db.escape.side_effect = lambda value: f"'{value}'"
 		condition = cycle_scope.survey_list_conditions()
 		self.assertIn("`tabSurvey`.`cycle` = 'SCY-CURRENT'", condition)
 
+	@patch("survey_app.cycle_scope.frappe")
 	@patch("survey_app.cycle_scope.hide_previous_cycle_data", return_value=True)
 	@patch("survey_app.cycle_scope.get_current_cycle", return_value=None)
-	def test_survey_list_hides_everything_without_a_current_cycle(self, _current, _hide):
+	def test_survey_list_hides_everything_without_a_current_cycle(self, _current, _hide, _frappe_api):
 		from survey_app import cycle_scope
 
 		self.assertEqual(cycle_scope.survey_list_conditions(), "1 = 0")
 
+	@patch("survey_app.cycle_scope.frappe")
 	@patch("survey_app.cycle_scope.hide_previous_cycle_data", return_value=False)
 	@patch("survey_app.cycle_scope.get_current_cycle", return_value={"name": "SCY-CURRENT"})
-	def test_survey_list_always_hides_legacy_when_history_visible(self, _current, _hide):
+	def test_survey_list_always_hides_legacy_when_history_visible(self, _current, _hide, _frappe_api):
 		from survey_app import cycle_scope
 
 		condition = cycle_scope.survey_list_conditions()
 		self.assertIn("IFNULL(`tabSurvey`.`cycle`, '') != ''", condition)
 
+	@patch("survey_app.cycle_scope.frappe")
 	@patch("survey_app.cycle_scope.hide_previous_cycle_data", return_value=True)
 	@patch("survey_app.cycle_scope.get_current_cycle", return_value={"name": "SCY-CURRENT"})
-	def test_response_list_scopes_via_survey_subquery(self, _current, _hide):
+	def test_response_list_scopes_via_survey_subquery(self, _current, _hide, frappe_api):
 		from survey_app import cycle_scope
 
+		frappe_api.db.escape.side_effect = lambda value: f"'{value}'"
 		condition = cycle_scope.survey_response_list_conditions()
 		self.assertIn("`tabSurvey Response`.`survey` IN", condition)
 		self.assertIn("`tabSurvey`.`cycle` = 'SCY-CURRENT'", condition)
@@ -148,6 +154,7 @@ class TestListScopingAndSubmissionGuards(TestCase):
 		frappe_api.get_doc.return_value = real_frappe._dict(
 			name="SURV-001", cycle="SCY-CURRENT", questions=[]
 		)
+		frappe_api.ValidationError = real_frappe.ValidationError
 		frappe_api.throw.side_effect = real_frappe.ValidationError
 
 		with self.assertRaises(real_frappe.ValidationError):
@@ -166,6 +173,7 @@ class TestListScopingAndSubmissionGuards(TestCase):
 		frappe_api._dict.side_effect = real_frappe._dict
 		frappe_api.db.exists.side_effect = lambda doctype, *args, **kwargs: doctype == "Survey"
 		frappe_api.get_doc.return_value = real_frappe._dict(name="LEGACY-1", cycle="", questions=[])
+		frappe_api.ValidationError = real_frappe.ValidationError
 		frappe_api.throw.side_effect = real_frappe.ValidationError
 
 		with self.assertRaises(real_frappe.ValidationError):
@@ -190,7 +198,7 @@ class TestListScopingAndSubmissionGuards(TestCase):
 		result = unwrap(get_survey_json)("SURV-001")
 		self.assertTrue(result["completed"])
 
-	@patch("survey_app.outstanding.send_survey_email")
+	@patch("survey_app.email_log.send_survey_email")
 	@patch("survey_app.outstanding.frappe")
 	def test_reminder_skips_when_same_pair_already_answered_elsewhere(self, frappe_api, send_email):
 		import frappe as real_frappe
