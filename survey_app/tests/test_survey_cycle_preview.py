@@ -373,6 +373,7 @@ class TestApplyRulesAndUnsentInvitations(TestCase):
 			],
 		)
 		cycle_doc.save = MagicMock()
+		cycle_doc.append = lambda fieldname, row: cycle_doc.pairs.append(frappe._dict(row))
 
 		def fake_get_doc(doctype, name=None, **kwargs):
 			if doctype == "Value Scoring Settings":
