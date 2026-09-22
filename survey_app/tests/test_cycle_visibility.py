@@ -215,3 +215,95 @@ class TestListScopingAndSubmissionGuards(TestCase):
 
 		self.assertEqual(result["status"], "already_completed")
 		send_email.assert_not_called()
+
+	@staticmethod
+	def _reminder_frappe_setup(frappe_api, reviewee="EMP-002"):
+		"""Configure the mocked frappe API so a reminder proceeds to sending."""
+		import frappe as real_frappe
+		from unittest.mock import MagicMock
+
+		frappe_api.db.exists.return_value = True
+		frappe_api.db.sql.return_value = []
+		survey_doc = real_frappe._dict(
+			name="SURV-X", rated_by="user@x.com", employee_score=reviewee,
+			creation="2026-09-15 10:00:00",
+		)
+
+		def get_doc(*args, **kwargs):
+			if args and isinstance(args[0], dict):
+				return MagicMock()
+			return survey_doc
+
+		frappe_api.get_doc.side_effect = get_doc
+		return survey_doc
+
+		def get_value(doctype, key=None, field=None, **kwargs):
+			if doctype == "Survey Cycle Pair":
+				return None
+			if doctype == "User":
+				return key
+			if doctype == "Employee":
+				return "Reviewer One" if isinstance(key, dict) else "Reviewee One"
+			return None
+
+		frappe_api.db.get_value.side_effect = get_value
+		frappe_api.log_error = MagicMock()
+
+	@patch("survey_app.outstanding.formatdate", return_value="22-09-2026")
+	@patch("survey_app.outstanding.now_datetime", return_value="2026-09-22 10:00:00")
+	@patch("survey_app.outstanding.today", return_value="2026-09-22")
+	@patch("survey_app.email_log.get_open_cycle_name", return_value="SCY-T")
+	@patch("survey_app.email_log.send_survey_email")
+	@patch("frappe.desk.doctype.notification_log.notification_log.enqueue_create_notification")
+	@patch("survey_app.outstanding.get_url", return_value="http://testsite")
+	@patch("survey_app.outstanding.frappe")
+	def test_reminder_notification_links_to_survey_page(self, frappe_api, _get_url, enqueue, send_email, _goc, _today, _now, _fd):
+		from survey_app.outstanding import _send_one_reminder
+
+		self._reminder_frappe_setup(frappe_api, reviewee="EMP-003")
+
+		result = _send_one_reminder("SURV-003")
+
+		self.assertEqual(result["status"], "sent")
+		self.assertEqual(enqueue.call_count, 1)
+		notification = enqueue.call_args[0][1]
+		self.assertEqual(notification["link"], "http://testsite/survey?id=SURV-003")
+		send_email.assert_called_once()
+
+	@patch("survey_app.outstanding.formatdate", return_value="22-09-2026")
+	@patch("survey_app.outstanding.now_datetime", return_value="2026-09-22 10:00:00")
+	@patch("survey_app.outstanding.today", return_value="2026-09-22")
+	@patch("survey_app.email_log.get_open_cycle_name", return_value="SCY-T")
+	@patch("survey_app.email_log.send_survey_email")
+	@patch(
+		"frappe.desk.doctype.notification_log.notification_log.enqueue_create_notification",
+		side_effect=RuntimeError,
+	)
+	@patch("survey_app.outstanding.get_url", return_value="http://testsite")
+	@patch("survey_app.outstanding.frappe")
+	def test_reminder_fallback_notification_links_to_survey_page(
+		self, frappe_api, _get_url, _enqueue, _se, _goc, _today, _now, _fd
+	):
+		from unittest.mock import MagicMock
+
+		from survey_app.outstanding import _send_one_reminder
+
+		survey_doc = self._reminder_frappe_setup(frappe_api, reviewee="EMP-004")
+
+		inserted = []
+
+		def get_doc(*args, **kwargs):
+			if args and isinstance(args[0], dict):
+				inserted.append(args[0])
+				return MagicMock()
+			return survey_doc
+
+		frappe_api.get_doc.side_effect = get_doc
+
+		result = _send_one_reminder("SURV-004")
+
+		self.assertEqual(result["status"], "sent")
+		self.assertEqual(
+			[doc["link"] for doc in inserted if doc.get("doctype") == "Notification Log"],
+			["http://testsite/survey?id=SURV-004"],
+		)

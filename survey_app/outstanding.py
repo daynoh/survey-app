@@ -355,7 +355,9 @@ def _send_one_reminder(survey_name):
 		expose_recipients="header",
 	)
 
-	# In-app notification so the reviewer also sees a clear reminder in desk
+	# In-app notification so the reviewer also sees a clear reminder in desk.
+	# `link` makes the bell notification (and its notification email button)
+	# open the survey completion page instead of the Survey record in the desk.
 	try:
 		from frappe.desk.doctype.notification_log.notification_log import enqueue_create_notification
 		notification = {
@@ -369,6 +371,7 @@ def _send_one_reminder(survey_name):
 				f"It has been pending for {days_pending} day(s).</p>"
 				f'<p><a href="{survey_url}">Open survey</a></p>'
 			),
+			"link": survey_url,
 			"from_user": frappe.session.user,
 		}
 		enqueue_create_notification([reviewer_user], notification)
@@ -386,6 +389,7 @@ def _send_one_reminder(survey_name):
 					f"Reminder — please complete the Staff 360° Review for {reviewee_name} "
 					f"(pending {days_pending} day(s)). {survey_url}"
 				),
+				"link": survey_url,
 				"from_user": frappe.session.user,
 			}).insert(ignore_permissions=True)
 		except Exception:
