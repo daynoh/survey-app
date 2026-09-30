@@ -70,6 +70,32 @@ class TestExplainEmptyResult(unittest.TestCase):
 		self.assertEqual(fake.msgprint.call_count, 0)
 
 
+class TestCycleFilter(unittest.TestCase):
+	def test_explicit_cycle_overrides_current_cycle_scope(self):
+		"""Picking Q3 in the Cycle filter must beat the hidden-history Q4 default."""
+		with patch.object(
+			rpt,
+			"get_cycle_scope",
+			return_value={"history_hidden": True, "current_cycle": {"name": "SCY-Q4"}},
+		):
+			conditions, values = rpt.get_conditions({"cycle": "SCY-2026-00001"})
+		self.assertIn("report_cycle_pair.parent = %(cycle)s", conditions)
+		self.assertEqual(values["cycle"], "SCY-2026-00001")
+		self.assertNotIn("1 = 0", conditions)
+		self.assertNotIn("current_cycle", values)
+
+	def test_no_cycle_filter_keeps_scope_default(self):
+		with patch.object(
+			rpt,
+			"get_cycle_scope",
+			return_value={"history_hidden": True, "current_cycle": {"name": "SCY-Q4"}},
+		):
+			conditions, values = rpt.get_conditions({})
+		self.assertIn("report_cycle_pair.parent = %(current_cycle)s", conditions)
+		self.assertEqual(values["current_cycle"], "SCY-Q4")
+		self.assertNotIn("cycle", values)
+
+
 class TestLastResponseNoneSafety(unittest.TestCase):
 	def test_none_submission_date_does_not_crash_bucketing(self):
 		"""A NULL submission_date on the first answer row used to raise

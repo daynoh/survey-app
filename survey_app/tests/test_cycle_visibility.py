@@ -34,6 +34,13 @@ class TestCurrentCycleVisibility(TestCase):
 		self.assertNotIn("scope_cycle_pair.parent", conditions)
 		self.assertNotIn("current_cycle", values)
 
+	def test_analytics_cycle_filter_overrides_scope(self):
+		conditions, values = build_conditions({"cycle": "SCY-2026-00001"}, scope=self.current_scope)
+
+		self.assertIn("scope_cycle_pair.parent = %(cycle)s", conditions)
+		self.assertEqual(values["cycle"], "SCY-2026-00001")
+		self.assertNotIn("current_cycle", values)
+
 	def test_standard_360_report_defaults_to_current_cycle(self):
 		with patch(
 			"survey_app.survey_app.report.employee_360_degree_survey_response."

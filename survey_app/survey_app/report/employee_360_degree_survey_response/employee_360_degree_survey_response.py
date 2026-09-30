@@ -393,14 +393,20 @@ def get_conditions(filters):
     conditions = ["sr.docstatus < 2"]
     values     = {}
 
-    scope = get_cycle_scope(filters.get("include_history"))
-    if scope.get("history_hidden"):
-        current_cycle = (scope.get("current_cycle") or {}).get("name")
-        if current_cycle:
-            conditions.append("report_cycle_pair.parent = %(current_cycle)s")
-            values["current_cycle"] = current_cycle
-        else:
-            conditions.append("1 = 0")
+    if filters.get("cycle"):
+        # explicit cycle selection wins over the current-cycle default —
+        # this is how HR reviews a finished cycle without touching history visibility
+        conditions.append("report_cycle_pair.parent = %(cycle)s")
+        values["cycle"] = filters["cycle"]
+    else:
+        scope = get_cycle_scope(filters.get("include_history"))
+        if scope.get("history_hidden"):
+            current_cycle = (scope.get("current_cycle") or {}).get("name")
+            if current_cycle:
+                conditions.append("report_cycle_pair.parent = %(current_cycle)s")
+                values["current_cycle"] = current_cycle
+            else:
+                conditions.append("1 = 0")
 
     if filters.get("from_date"):
         conditions.append("sr.submission_date >= %(from_date)s")

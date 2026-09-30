@@ -101,7 +101,11 @@ def build_conditions(filters, scope=None):
     values = {}
 
     scope = scope or get_cycle_scope(filters.get("include_history"))
-    if not scope.get("include_history"):
+    if filters.get("cycle"):
+        # explicit cycle selection wins over the current-cycle default
+        conditions.append("scope_cycle_pair.parent = %(cycle)s")
+        values["cycle"] = filters["cycle"]
+    elif not scope.get("include_history"):
         current_cycle = (scope.get("current_cycle") or {}).get("name")
         if current_cycle:
             conditions.append("scope_cycle_pair.parent = %(current_cycle)s")

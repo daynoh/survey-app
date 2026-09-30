@@ -52,6 +52,10 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 					<span class="sa-filter-label">${__('Category')}</span>
 					<select class="form-control input-sm" id="f-cat"><option value="">${__('All Categories')}</option></select>
 				</div>
+				<div class="sa-filter-group">
+					<span class="sa-filter-label">${__('Cycle')}</span>
+					<select class="form-control input-sm" id="f-cycle"><option value="">${__('Current Cycle')}</option></select>
+				</div>
 				<label class="sa-history-toggle" title="${__('Historical records are preserved; this only changes what the dashboard displays.')}">
 					<input type="checkbox" id="f-include-history"> ${__('Include earlier/test cycles')}
 				</label>
@@ -453,6 +457,27 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 	});
 	load_employees();
 
+	function load_cycles() {
+		frappe.call({
+			method: 'frappe.client.get_list',
+			args: {
+				doctype: 'Survey Cycle',
+				fields: ['name', 'title', 'period_start'],
+				order_by: 'period_start desc',
+				limit_page_length: 20
+			},
+			callback: function (r) {
+				$('#f-cycle').empty().append('<option value="">' + __('Current Cycle') + '</option>');
+				(r.message || []).forEach(function (c) {
+					$('#f-cycle').append(
+						'<option value="' + frappe.utils.escape_html(c.name) + '">' +
+						frappe.utils.escape_html(c.title || c.name) + '</option>'
+					);
+				});
+			}
+		});
+	}
+
 	function load_employees() {
 		var dep = $('#f-dept').val() || undefined;
 		var args = {
@@ -480,6 +505,7 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 
 	set_preset(90);
 	update_period_label();
+	load_cycles();
 
 	$('.preset-btn').on('click', function () {
 		$('.preset-btn').removeClass('active btn-primary').addClass('btn-default');
@@ -521,6 +547,11 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 		load_employees();
 		load_data();
 	});
+	$('#f-cycle').on('change', function () {
+		activeScope = null;
+		update_period_label();
+		load_data();
+	});
 	$('#f-emp, #f-cat, #f-include-history').on('change', function () {
 		activeScope = null;
 		update_period_label();
@@ -530,7 +561,7 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 		set_preset(90);
 		$('.preset-btn').removeClass('active btn-primary').addClass('btn-default');
 		$('.preset-btn[data-preset="90"]').addClass('active btn-primary').removeClass('btn-default');
-		$('#f-dept, #f-emp, #f-cat').val('');
+		$('#f-dept, #f-emp, #f-cat, #f-cycle').val('');
 		$('#f-include-history').prop('checked', false);
 		activeScope = null;
 		update_period_label();
@@ -542,6 +573,7 @@ frappe.pages['survey-analytics'].on_page_load = function (wrapper) {
 	function load_data() {
 		show_loading();
 		var filters = {
+			cycle: $('#f-cycle').val() || '',
 			from_date: $('#f-from').val() || undefined,
 			to_date: $('#f-to').val() || undefined,
 			department: $('#f-dept').val() || undefined,

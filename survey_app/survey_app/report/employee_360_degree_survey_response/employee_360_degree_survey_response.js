@@ -87,6 +87,13 @@ frappe.query_reports["Employee 360 Degree Survey Response"] = {
 			description: __("Current cycle only by default. Historical records are not deleted."),
 		},
 		{
+			fieldname: "cycle",
+			label: __("Cycle"),
+			fieldtype: "Link",
+			options: "Survey Cycle",
+			description: __("Leave empty for the current cycle — pick an older cycle to review exactly that one."),
+		},
+		{
 			fieldname: "survey",
 			label: __("Survey"),
 			fieldtype: "Link",
