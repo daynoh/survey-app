@@ -36,6 +36,33 @@ from survey_app.survey_cycle import (
 )
 
 
+def _report_already_sent(employee, period_start, period_end, report_type):
+	"""One report per employee per period, no matter how often sends run.
+
+	Forced re-runs re-emailed the whole org the identical Q3 report three times
+	on 30 Sep 2026; bulk sends must stay idempotent. Single-employee previews
+	(from send_individual_reports(employee=...)) may still re-send."""
+	return frappe.db.exists(
+		"Survey Report Log",
+		{
+			"employee": employee,
+			"period_start": period_start,
+			"period_end": period_end,
+			"report_type": report_type,
+			"status": ("in", ("Pending", "Sent")),
+		},
+	)
+
+
+def _digest_already_sent(email, email_type, subject):
+	"""Digests (Manager/MD/HR) have no Survey Report Log row — dedupe on the
+	email log itself, matching the exact period-stamped subject."""
+	return frappe.db.exists(
+		"Survey Email Log",
+		{"recipient": email, "email_type": email_type, "subject": subject},
+	)
+
+
 @frappe.whitelist()
 @survey_admin_required
 def auto_send_reports_if_due(force=0):
@@ -126,6 +153,10 @@ def send_individual_reports(force=0, employee=None):
 			email = payload.get("email")
 			if not email:
 				skipped.append({"employee": emp, "reason": "no_email"})
+				continue
+
+			if not employee and _report_already_sent(emp, period_start, period_end, report_type):
+				skipped.append({"employee": emp, "reason": "already_sent"})
 				continue
 
 			cc = []
@@ -398,6 +429,9 @@ def send_manager_reports(force=0, manager=None):
 				f"{payload.get('digest_title') or 'Team Performance Digest'} — {payload.get('manager_name')} "
 				f"({formatdate(period_start)} – {formatdate(period_end)})"
 			)
+			if not manager and _digest_already_sent(email, "Manager Report", subject):
+				skipped.append({"manager": mgr, "reason": "already_sent"})
+				continue
 			from survey_app.email_log import send_survey_email
 
 			mail_result = send_survey_email(
@@ -430,28 +464,31 @@ def send_manager_reports(force=0, manager=None):
 					f"{payload.get('digest_title') or 'Leadership Performance Digest'} — {payload.get('manager_name')} "
 					f"({formatdate(period_start)} – {formatdate(period_end)})"
 				)
-				from survey_app.email_log import send_survey_email
-
-				mail_result = send_survey_email(
-					email_type="MD Report",
-					recipients=[email],
-					subject=subject,
-					message=payload["html"],
-					cycle=cycle.name if cycle else None,
-					employee=md,
-					recipient_name=payload.get("manager_name"),
-					reference_doctype="Employee",
-					reference_name=md,
-				)
-				if mail_result.get("status") in ("queued", "sent"):
-					sent.append({
-						"manager": md,
-						"email": email,
-						"managers": len(payload.get("managers") or []),
-						"kind": "md",
-					})
+				if not manager and _digest_already_sent(email, "MD Report", subject):
+					skipped.append({"manager": md, "reason": "already_sent"})
 				else:
-					failed.append({"manager": md, "error": mail_result.get("error") or "send failed"})
+					from survey_app.email_log import send_survey_email
+
+					mail_result = send_survey_email(
+						email_type="MD Report",
+						recipients=[email],
+						subject=subject,
+						message=payload["html"],
+						cycle=cycle.name if cycle else None,
+						employee=md,
+						recipient_name=payload.get("manager_name"),
+						reference_doctype="Employee",
+						reference_name=md,
+					)
+					if mail_result.get("status") in ("queued", "sent"):
+						sent.append({
+							"manager": md,
+							"email": email,
+							"managers": len(payload.get("managers") or []),
+							"kind": "md",
+						})
+					else:
+						failed.append({"manager": md, "error": mail_result.get("error") or "send failed"})
 		except Exception as e:
 			frappe.log_error(title="MD Report Failed", message=frappe.get_traceback())
 			failed.append({"manager": md, "error": str(e)})
@@ -499,6 +536,11 @@ def send_hr_reports(force=0):
 		f"Organisation Performance Digest "
 		f"({formatdate(period_start)} – {formatdate(period_end)})"
 	)
+	recipients = [
+		e for e in recipients if not _digest_already_sent(e, "HR Report", subject)
+	]
+	if not recipients:
+		return {"status": "skipped", "reason": "already_sent", "sent": 0}
 	from survey_app.email_log import send_survey_email
 
 	mail_result = send_survey_email(
