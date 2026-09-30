@@ -823,6 +823,7 @@ survey_app.SurveySetup = class SurveySetup {
 		this.tab_roles.find('#preview-load-btn').on('click', function () {
 			frappe.call({
 				method: 'survey_app.survey_cycle.preview_cycle_load',
+				args: { strategy: me.tab_automation.find('#cycle-strategy-select').val() || '' },
 				freeze: true,
 				callback: function (r) {
 					if (r.exc || !r.message) return;
@@ -834,6 +835,7 @@ survey_app.SurveySetup = class SurveySetup {
 		this.tab_roles.find('#preview-assignments-btn').on('click', function () {
 			frappe.call({
 				method: 'survey_app.survey_cycle.preview_cycle_assignments',
+				args: { strategy: me.tab_automation.find('#cycle-strategy-select').val() || '' },
 				freeze: true,
 				freeze_message: __('Preparing assignment preview...'),
 				callback: function (r) {
@@ -1117,6 +1119,9 @@ survey_app.SurveySetup = class SurveySetup {
 		if (data.batch_window_note) {
 			html += '<div class="alert alert-info">' + frappe.utils.escape_html(data.batch_window_note) + '</div>';
 		}
+		if (data.strategy_source === 'selected' && data.open_cycle_strategy && data.open_cycle_strategy !== data.generation_strategy) {
+			html += '<div class="alert alert-info">' + __('Previewing {0} — the open cycle still runs {1} until the next period starts.', [frappe.utils.escape_html(data.generation_strategy), frappe.utils.escape_html(data.open_cycle_strategy)]) + '</div>';
+		}
 		if ((data.warnings || []).length) {
 			html += '<div class="alert alert-warning">' + data.warnings.map(frappe.utils.escape_html).join('<br>') + '</div>';
 		}
@@ -1168,9 +1173,14 @@ survey_app.SurveySetup = class SurveySetup {
 			(data.statuses || []).map(function (status) { return option(status, status); }).join('');
 		var cycle = data.cycle || {};
 		var strategy = data.generation_strategy || cycle.generation_strategy || 'Balanced Coverage';
-		var source_message = data.is_cycle_plan
-			? __('This is the exact {0} plan stored for {1}. Survey batches use these reviewer–reviewee pairs.', [strategy, cycle.title || cycle.name || __('the open cycle')])
-			: __('No open cycle exists. This preview uses {0}; use Build / Refresh Cycle to store the exact plan.', [strategy]);
+		var source_message;
+		if (data.is_cycle_plan) {
+			source_message = __('This is the exact {0} plan stored for {1}. Survey batches use these reviewer–reviewee pairs.', [strategy, cycle.title || cycle.name || __('the open cycle')]);
+		} else if (cycle.name) {
+			source_message = __('Calculated {0} plan for the cycle period {1} → {2}. The open cycle ({3}) still runs {4} — click Build / Refresh Cycle in Automation & Cycle to store this plan when the period starts.', [strategy, data.preview_period ? data.preview_period.start : '…', data.preview_period ? data.preview_period.end : '…', cycle.title || cycle.name, cycle.generation_strategy || __('the same strategy')]);
+		} else {
+			source_message = __('No open cycle exists. This preview uses {0}; use Build / Refresh Cycle to store the exact plan.', [strategy]);
+		}
 
 		var dialog = new frappe.ui.Dialog({
 			title: __('Who Reviews Who'),

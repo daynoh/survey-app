@@ -14,6 +14,7 @@ from survey_app.survey_cycle import (
 
 
 class TestSurveyCycleAssignmentPreview(TestCase):
+	@patch("survey_app.survey_cycle._cycle_period", side_effect=lambda c, as_of=None: ("2026-07-01", "2026-09-30") if not as_of else ("2026-10-01", "2026-12-31"))
 	@patch("survey_app.survey_cycle.build_required_pairs")
 	@patch("survey_app.survey_cycle.resolve_org_roles")
 	@patch("survey_app.survey_cycle.frappe")
@@ -22,6 +23,7 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		frappe_api,
 		resolve_org_roles,
 		build_required_pairs,
+		_cycle_period,
 	):
 		frappe_api.db.get_value.return_value = None
 		frappe_api._dict.side_effect = frappe._dict
@@ -49,6 +51,7 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		self.assertEqual(result["rows"][0]["reviewer_cycle_load"], 2)
 		self.assertEqual(result["by_rule"], {"Nearness": 1, "Peer": 1})
 		self.assertEqual(result["warnings"], ["Missing team leader"])
+		self.assertEqual(result["preview_period"], {"start": "2026-07-01", "end": "2026-09-30"})
 		self.assertIsNone(result["exclusion_conflicts"])
 		self.assertEqual(result["excluded_people"], [])
 
@@ -127,6 +130,125 @@ class TestSurveyCycleAssignmentPreview(TestCase):
 		self.assertEqual(rows["EMP-003"]["required_surveys"], 0)
 		self.assertTrue(rows["EMP-003"]["review_only"])
 		self.assertEqual(rows["EMP-003"]["reviews_received"], 2)
+	@patch("survey_app.survey_cycle.today", lambda: "2026-09-30")
+	@patch("survey_app.survey_cycle._cycle_period", side_effect=lambda c, as_of=None: ("2026-07-01", "2026-09-30") if not as_of else ("2026-10-01", "2026-12-31"))
+	@patch("survey_app.survey_cycle.build_required_pairs")
+	@patch("survey_app.survey_cycle.resolve_org_roles")
+	@patch("survey_app.survey_cycle.frappe")
+	def test_strategy_override_previews_balanced_while_baseline_open(
+		self,
+		frappe_api,
+		resolve_org_roles,
+		build_required_pairs,
+		_cycle_period,
+	):
+		"""The Q4 case: an open Full Baseline cycle exists, HR previews the Balanced
+		plan the next cycle will use — calculated, not the stored matrix."""
+		frappe_api._dict.side_effect = frappe._dict
+		baseline_doc = frappe._dict(
+			name="SCY-2026-00001",
+			title="Cycle 2026-07-01 → 2026-09-30",
+			status="Open",
+			generation_strategy="Full Baseline Matrix",
+			current_batch=5,
+			assigned_pairs=631,
+			period_start="2026-07-01",
+			period_end="2026-09-30",
+			pairs=[
+				frappe._dict(reviewer="EMP-010", reviewee="EMP-011", rule_type="Peer", status="Assigned", batch_no=5)
+			],
+		)
+		frappe_api.db.get_value.return_value = "SCY-2026-00001"
+		frappe_api.get_doc.side_effect = lambda *a: (
+			baseline_doc if a and a[0] == "Survey Cycle" else frappe._dict()
+		)
+		resolve_org_roles.return_value = {"warnings": []}
+		build_required_pairs.return_value = [
+			{"reviewer": "EMP-001", "reviewee": "EMP-002", "rule_type": "Peer"},
+		]
+		frappe_api.get_all.return_value = [
+			frappe._dict(name="EMP-001", employee_name="Alice", department="Finance"),
+			frappe._dict(name="EMP-002", employee_name="Bob", department="Finance"),
+		]
+
+		result = unwrap(preview_cycle_assignments)(strategy="Balanced Coverage")
+
+		self.assertEqual(result["source"], "calculated")
+		self.assertFalse(result["is_cycle_plan"])
+		self.assertEqual(result["generation_strategy"], "Balanced Coverage")
+		# the open cycle is still surfaced so the UI can explain the situation
+		self.assertEqual(result["cycle"]["name"], "SCY-2026-00001")
+		self.assertEqual(result["cycle"]["generation_strategy"], "Full Baseline Matrix")
+		self.assertTrue(result["preview_period"])
+		# the hypothetical plan must hash with the same key the next build will use
+		cycle_key = build_required_pairs.call_args.kwargs["cycle_key"]
+		self.assertIn("Balanced Coverage", cycle_key)
+		self.assertEqual(result["preview_period"], {"start": "2026-10-01", "end": "2026-12-31"})
+		self.assertEqual(build_required_pairs.call_args.kwargs["strategy"], "Balanced Coverage")
+
+	@patch("survey_app.survey_cycle.resolve_org_roles", return_value={"warnings": []})
+	@patch("survey_app.survey_cycle.frappe")
+	def test_strategy_match_shows_stored_plan(self, frappe_api, _resolve_org_roles):
+		"""When the selected strategy equals the open cycle's (unlocked) strategy the
+		stored plan is the truth."""
+		frappe_api._dict.side_effect = frappe._dict
+		doc = frappe._dict(
+			name="SCY-2026-00002",
+			title="Next",
+			status="Open",
+			generation_strategy="Balanced Coverage",
+			current_batch=0,
+			assigned_pairs=0,
+			pairs=[frappe._dict(reviewer="A", reviewee="B", rule_type="Peer", status="Planned", batch_no=0)],
+		)
+		frappe_api.db.get_value.return_value = "SCY-2026-00002"
+		frappe_api.get_doc.side_effect = lambda *a: (
+			doc if a and a[0] == "Survey Cycle" else frappe._dict()
+		)
+		frappe_api.get_all.return_value = []
+
+		result = unwrap(preview_cycle_assignments)(strategy="Balanced Coverage")
+		self.assertTrue(result["is_cycle_plan"])
+		self.assertEqual(result["cycle"]["name"], "SCY-2026-00002")
+
+	@patch("survey_app.survey_cycle._batches_remaining", return_value=4)
+	@patch("survey_app.survey_cycle._cycle_period", return_value=("2026-07-01", "2026-09-30"))
+	@patch("survey_app.survey_cycle.build_required_pairs")
+	@patch("survey_app.survey_cycle.resolve_org_roles")
+	@patch("survey_app.survey_cycle.frappe")
+	def test_load_preview_reports_strategy_source(
+		self,
+		frappe_api,
+		resolve_org_roles,
+		build_required_pairs,
+		_cycle_period,
+		_batches_remaining,
+	):
+		frappe_api._dict.side_effect = frappe._dict
+		frappe_api.get_doc.return_value = frappe._dict(
+			generation_frequency="Weekly",
+			completeness_cycle="Quarterly",
+		)
+		resolve_org_roles.return_value = {"warnings": []}
+		build_required_pairs.return_value = [
+			{"reviewer": "EMP-001", "reviewee": "EMP-002", "rule_type": "Peer"},
+		]
+		frappe_api.get_all.return_value = [
+			frappe._dict(name="EMP-001", employee_name="Alice", department="Finance"),
+			frappe._dict(name="EMP-002", employee_name="Bob", department="Finance"),
+		]
+		frappe_api.db.get_value.return_value = "Full Baseline Matrix"
+
+		selected = unwrap(preview_cycle_load)("Balanced Coverage")
+		self.assertEqual(selected["strategy_source"], "selected")
+		self.assertEqual(selected["generation_strategy"], "Balanced Coverage")
+		self.assertEqual(selected["open_cycle_strategy"], "Full Baseline Matrix")
+
+		# no explicit strategy: the open cycle's strategy drives the preview
+		from_cylce = unwrap(preview_cycle_load)()
+		self.assertEqual(from_cylce["strategy_source"], "open_cycle")
+		self.assertEqual(from_cylce["generation_strategy"], "Full Baseline Matrix")
+
 
 	@patch("survey_app.survey_cycle.resolve_org_roles", return_value={"warnings": []})
 	@patch("survey_app.survey_cycle.frappe")

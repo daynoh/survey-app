@@ -674,16 +674,21 @@ def preview_cycle_load(strategy=None):
 	"""Estimated load per reviewer for the planned matrix + batch size."""
 	settings = _settings()
 	roles = resolve_org_roles()
+	open_cycle_strategy = frappe.db.get_value(
+		"Survey Cycle",
+		{"status": ["in", ["Open", "Generating", "Reporting"]]},
+		"generation_strategy",
+		order_by="period_start desc",
+	)
 	if strategy:
 		selected_strategy = _normalise_cycle_strategy(strategy)
+		strategy_source = "selected"
+	elif open_cycle_strategy:
+		selected_strategy = _normalise_cycle_strategy(open_cycle_strategy)
+		strategy_source = "open_cycle"
 	else:
-		selected_strategy = frappe.db.get_value(
-			"Survey Cycle",
-			{"status": ["in", ["Open", "Generating", "Reporting"]]},
-			"generation_strategy",
-			order_by="period_start desc",
-		) or BALANCED_STRATEGY
-		selected_strategy = _normalise_cycle_strategy(selected_strategy)
+		selected_strategy = BALANCED_STRATEGY
+		strategy_source = "default"
 	survey_freq = settings.generation_frequency or "Weekly"
 	cycle = settings.completeness_cycle or "Quarterly"
 	period_start, period_end = _cycle_period(cycle)
@@ -817,18 +822,26 @@ def preview_cycle_load(strategy=None):
 		"warnings": warnings,
 		"generation_mode": getattr(settings, "generation_mode", None) or "Cycle Matrix",
 		"generation_strategy": selected_strategy,
+		"strategy_source": strategy_source,
+		"open_cycle_strategy": open_cycle_strategy or None,
 	}
 
 
 @frappe.whitelist()
 @survey_admin_required
-def preview_cycle_assignments(cycle=None):
-	"""Return the exact HR-only reviewer/reviewee plan without survey responses."""
+def preview_cycle_assignments(cycle=None, strategy=None):
+	"""Return the exact HR-only reviewer/reviewee plan without survey responses.
+
+	With `strategy` set, previews the plan that strategy would create even while
+	an older cycle with a different strategy is still open — e.g. previewing next
+	cycle's Balanced Coverage while the Full Baseline cycle finishes."""
 	roles = resolve_org_roles()
 	settings = _settings()
 	excluded_reviewees, excluded_reviewers = _excluded_employees(settings)
 	warnings = list(roles.get("warnings") or [])
 	doc = None
+	open_cycle_meta = None
+	preview_period = None
 
 	if cycle:
 		if not frappe.db.exists("Survey Cycle", cycle):
@@ -843,6 +856,22 @@ def preview_cycle_assignments(cycle=None):
 		)
 		if open_cycle:
 			doc = frappe.get_doc("Survey Cycle", open_cycle)
+			open_cycle_meta = {
+				"name": doc.name,
+				"title": doc.title,
+				"status": doc.status,
+				"current_batch": cint(doc.current_batch),
+				"generation_strategy": doc.generation_strategy or BALANCED_STRATEGY,
+				"period_start": str(doc.period_start),
+				"period_end": str(doc.period_end),
+			}
+			# an explicitly chosen strategy previews the plan being considered, not
+			# the stored one (locked cycles cannot be changed, so show what a new
+			# cycle with the requested strategy would look like)
+			if strategy:
+				wanted = _normalise_cycle_strategy(strategy)
+				if _cycle_strategy_locked(doc) or (doc.generation_strategy or BALANCED_STRATEGY) != wanted:
+					doc = None
 
 	if doc:
 		selected_strategy = _normalise_cycle_strategy(doc.generation_strategy or BALANCED_STRATEGY)
@@ -858,16 +887,32 @@ def preview_cycle_assignments(cycle=None):
 		]
 		source = "cycle"
 	else:
-		selected_strategy = BALANCED_STRATEGY
+		selected_strategy = _normalise_cycle_strategy(strategy) if strategy else BALANCED_STRATEGY
+		# The hypothetical plan targets the cycle period that has no open cycle yet.
+		# When the current period's cycle is still running, that is the NEXT period —
+		# the same key Build / Refresh Cycle will use, so the preview matches the build.
+		completeness = settings.completeness_cycle or "Quarterly"
+		period_start, period_end = _cycle_period(completeness)
+		if (
+			open_cycle_meta
+			and open_cycle_meta.get("period_end")
+			and getdate(open_cycle_meta["period_end"]) >= getdate(today())
+		):
+			period_start, period_end = _cycle_period(completeness, as_of=add_days(period_end, 1))
 		pairs = [
 			{
 				**p,
 				"status": "Planned",
 				"batch_no": 0,
 			}
-			for p in build_required_pairs(roles, strategy=selected_strategy)
+			for p in build_required_pairs(
+				roles,
+				strategy=selected_strategy,
+				cycle_key=f"{period_start}|{period_end}|{selected_strategy}",
+			)
 		]
 		source = "calculated"
+		preview_period = {"start": str(period_start), "end": str(period_end)}
 
 	exclusion_conflicts = None
 	if source == "cycle" and (excluded_reviewees or excluded_reviewers):
@@ -1044,13 +1089,14 @@ def preview_cycle_assignments(cycle=None):
 		"source": source,
 		"is_cycle_plan": source == "cycle",
 		"generation_strategy": selected_strategy,
+		"preview_period": preview_period,
 		"cycle": {
 			"name": doc.name,
 			"title": doc.title,
 			"status": doc.status,
 			"current_batch": cint(doc.current_batch),
 			"generation_strategy": selected_strategy,
-		} if doc else None,
+		} if doc else open_cycle_meta,
 		"summary": {
 			"total_pairs": len(rows),
 			"reviewers": len(reviewer_load),
