@@ -1,4 +1,4 @@
-// Report: Employee 360 Degree Survey Respose
+// Report: Employee 360 Degree Survey Response
 
 function survey_report_download(file_format) {
 	const report = frappe.query_report;
@@ -62,7 +62,7 @@ function survey_report_download(file_format) {
 	});
 }
 
-frappe.query_reports["Employee 360 Degree Survey Respose"] = {
+frappe.query_reports["Employee 360 Degree Survey Response"] = {
 	filters: [
 		{
 			fieldname: "from_date",

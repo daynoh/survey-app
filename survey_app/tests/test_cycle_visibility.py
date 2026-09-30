@@ -4,7 +4,7 @@ from unittest.mock import patch
 from survey_app.my_surveys import _get_assignments, _get_result_periods
 from survey_app.survey_analytics import build_conditions
 from survey_app.cycle_scope import hide_previous_cycle_data
-from survey_app.survey_app.report.employee_360_degree_survey_respose.employee_360_degree_survey_respose import (
+from survey_app.survey_app.report.employee_360_degree_survey_response.employee_360_degree_survey_response import (
 	get_conditions as get_report_conditions,
 )
 
@@ -36,8 +36,8 @@ class TestCurrentCycleVisibility(TestCase):
 
 	def test_standard_360_report_defaults_to_current_cycle(self):
 		with patch(
-			"survey_app.survey_app.report.employee_360_degree_survey_respose."
-			"employee_360_degree_survey_respose.get_cycle_scope",
+			"survey_app.survey_app.report.employee_360_degree_survey_response."
+			"employee_360_degree_survey_response.get_cycle_scope",
 			return_value=self.current_scope,
 		):
 			conditions, values = get_report_conditions({})

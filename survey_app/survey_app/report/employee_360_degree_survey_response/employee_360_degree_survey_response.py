@@ -20,7 +20,7 @@ Schema clarifications:
 
 import frappe
 from frappe import _
-from frappe.utils import flt, cstr
+from frappe.utils import cint, flt, cstr
 
 from survey_app.cycle_scope import get_cycle_scope
 
@@ -28,10 +28,37 @@ from survey_app.cycle_scope import get_cycle_scope
 def execute(filters=None):
     filters = filters or {}
     columns = get_columns(filters)
-    data    = get_data(filters)
-    chart   = get_chart(data, filters)
-    summary = get_report_summary(data, filters)
+    conditions, values = get_conditions(filters)
+    coverage = get_response_coverage(conditions, values)
+    data     = get_data(filters, conditions=conditions, values=values, coverage=coverage)
+    chart    = get_chart(data, filters)
+    summary  = get_report_summary(data, coverage=coverage)
     return columns, data, None, chart, summary
+
+
+def get_response_coverage(conditions, values):
+    """How many responses match the filters, with vs without saved selections.
+
+    Some older submissions lost their per-question selection rows (a submission
+    bug since fixed), so those responses cannot be scored per category."""
+    return frappe.db.sql(
+        f"""
+        SELECT
+            COUNT(DISTINCT sr.name) AS responses,
+            COUNT(DISTINCT CASE WHEN srs.name IS NOT NULL THEN sr.name END) AS with_selections
+        FROM `tabSurvey Response` sr
+        INNER JOIN `tabSurvey` s ON s.name = sr.survey
+        LEFT JOIN `tabSurvey Cycle Pair` report_cycle_pair
+            ON report_cycle_pair.survey = s.name
+            AND report_cycle_pair.parenttype = 'Survey Cycle'
+            AND report_cycle_pair.parentfield = 'pairs'
+        INNER JOIN `tabSurvey Response Answer` sra ON sra.parent = sr.name
+        LEFT JOIN `tabSurvey Response Selection` srs ON srs.parent = sra.name
+        WHERE {conditions}
+        """,
+        values,
+        as_dict=True,
+    )[0]
 
 
 # ---------------------------------------------------------------------------
@@ -125,8 +152,10 @@ def get_columns(filters):
 # Main data fetch
 # ---------------------------------------------------------------------------
 
-def get_data(filters):
-    conditions, values = get_conditions(filters)
+def get_data(filters, conditions=None, values=None, coverage=None):
+    if conditions is None or values is None:
+        conditions, values = get_conditions(filters)
+    coverage = coverage or get_response_coverage(conditions, values)
 
     # ------------------------------------------------------------------
     # STEP 1 – Fetch all answer rows with their category
@@ -216,6 +245,7 @@ ORDER BY
     raw_rows = frappe.db.sql(sql, values, as_dict=True)
 
     if not raw_rows:
+        _explain_empty_result(coverage)
         return []
 
 
@@ -272,7 +302,7 @@ ORDER BY
 
         if (
             row.submission_date
-            and row.submission_date > bucket["last_response"]
+            and (not bucket["last_response"] or row.submission_date > bucket["last_response"])
         ):
             bucket["last_response"] = row.submission_date
 
@@ -316,6 +346,21 @@ ORDER BY
 
     data.sort(key=lambda r: (cstr(r["employee"]), cstr(r["category"])))
     return data
+
+
+def _explain_empty_result(coverage):
+    """Turn a silent blank table into an explained one when the cause is the
+    known lost-selections data gap."""
+    if not coverage or not cint(coverage.get("responses") or 0):
+        return  # genuinely no matching data — the standard "No Data" is fine
+    if not cint(coverage.get("with_selections") or 0):
+        frappe.msgprint(
+            _("{0} response(s) match these filters, but none of them saved per-question "
+              "selections, so there is nothing to score. This affects older submissions "
+              "made before the submission bug was fixed.").format(coverage["responses"]),
+            title=_("Nothing to score yet"),
+            indicator="orange",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -400,7 +445,7 @@ def get_chart(data, filters):
 # Report summary cards
 # ---------------------------------------------------------------------------
 
-def get_report_summary(data, filters):
+def get_report_summary(data, filters=None, coverage=None):
     if not data:
         return None
 
@@ -411,7 +456,7 @@ def get_report_summary(data, filters):
     unique_employees  = len({r["employee"] for r in data if r["employee"]})
     unique_categories = len({r["category"] for r in data if r["category"]})
 
-    return [
+    summary = [
         {
             "value":     unique_employees,
             "label":     _("Employees Rated"),
@@ -441,3 +486,13 @@ def get_report_summary(data, filters):
             ),
         },
     ]
+
+    # make the lost-selections gap visible instead of silently understating scores
+    if coverage and cint(coverage.get("responses") or 0) > cint(coverage.get("with_selections") or 0):
+        summary.append({
+            "value":     _("{0} of {1}").format(coverage["with_selections"], coverage["responses"]),
+            "label":     _("Responses Scored / Found"),
+            "datatype":  "Data",
+            "indicator": "orange",
+        })
+    return summary

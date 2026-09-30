@@ -13,11 +13,11 @@
  "modified": "2026-06-04 02:07:43.216406",
  "modified_by": "Administrator",
  "module": "Survey App",
- "name": "Employee 360 Degree Survey Respose",
+ "name": "Employee 360 Degree Survey Response",
  "owner": "Administrator",
  "prepared_report": 0,
  "ref_doctype": "Survey",
- "report_name": "Employee 360 Degree Survey Respose",
+ "report_name": "Employee 360 Degree Survey Response",
  "report_type": "Script Report",
  "roles": [
   {

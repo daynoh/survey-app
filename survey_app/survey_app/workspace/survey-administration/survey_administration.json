@@ -135,7 +135,7 @@
    "is_query_report": 1,
    "label": "Employee 360 Degree Report",
    "link_count": 0,
-   "link_to": "Employee 360 Degree Survey Respose",
+   "link_to": "Employee 360 Degree Survey Response",
    "link_type": "Report",
    "onboard": 0,
    "type": "Link"
@@ -272,7 +272,7 @@
    "color": "Grey",
    "doc_view": "",
    "label": "360 Report",
-   "link_to": "Employee 360 Degree Survey Respose",
+   "link_to": "Employee 360 Degree Survey Response",
    "type": "Report"
   },
   {
