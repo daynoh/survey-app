@@ -31,6 +31,8 @@ def execute(filters=None):
     conditions, values = get_conditions(filters)
     coverage = get_response_coverage(conditions, values)
     data     = get_data(filters, conditions=conditions, values=values, coverage=coverage)
+    if not data:
+        _explain_empty_result(filters, coverage)
     chart    = get_chart(data, filters)
     summary  = get_report_summary(data, coverage=coverage)
     return columns, data, None, chart, summary
@@ -348,9 +350,29 @@ ORDER BY
     return data
 
 
-def _explain_empty_result(coverage):
-    """Turn a silent blank table into an explained one when the cause is the
-    known lost-selections data gap."""
+def _explain_empty_result(filters, coverage):
+    """Turn a silent blank table into an explained one. Two known causes:
+    responses hidden by the current-cycle scope, and the lost-selections gap."""
+    history_filters = dict(filters or {})
+    history_filters["include_history"] = 1
+    try:
+        conditions, values = get_conditions(history_filters)
+        history_coverage = get_response_coverage(conditions, values)
+    except Exception:
+        frappe.log_error(title="360 report history probe failed", message=frappe.get_traceback())
+        history_coverage = None
+
+    if history_coverage and cint(history_coverage.get("with_selections") or 0):
+        frappe.msgprint(
+            _("{0} scoreable response(s) match these filters but fall outside the current "
+              "cycle. Tick 'Include Earlier/Test Cycles' to show them.").format(
+                history_coverage["with_selections"]
+            ),
+            title=_("Data is outside the current cycle"),
+            indicator="blue",
+        )
+        return
+
     if not coverage or not cint(coverage.get("responses") or 0):
         return  # genuinely no matching data — the standard "No Data" is fine
     if not cint(coverage.get("with_selections") or 0):
