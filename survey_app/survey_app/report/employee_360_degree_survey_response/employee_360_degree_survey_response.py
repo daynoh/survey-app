@@ -247,7 +247,7 @@ ORDER BY
     raw_rows = frappe.db.sql(sql, values, as_dict=True)
 
     if not raw_rows:
-        _explain_empty_result(coverage)
+        _explain_empty_result(filters, coverage)
         return []
 
 

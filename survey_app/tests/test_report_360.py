@@ -124,3 +124,22 @@ class TestLastResponseNoneSafety(unittest.TestCase):
 			bucket["last_response"] = row.submission_date
 		self.assertEqual(bucket["total_questions"], 1)
 		self.assertIsNone(bucket["last_response"])
+
+
+class TestEmptyPathWiring(unittest.TestCase):
+	def test_get_data_explains_with_filters_and_coverage(self):
+		"""Regression: the empty-result path called _explain_empty_result with a
+		single argument (stale signature) and crashed with TypeError."""
+		from unittest.mock import patch
+
+		fake = MagicMock()
+		fake.db.sql.return_value = []
+		with patch.object(rpt, "frappe", fake), patch.object(
+			rpt, "get_conditions", return_value=("1=1", {})
+		), patch.object(
+			rpt, "get_response_coverage", return_value=frappe._dict(responses=0, with_selections=0)
+		), patch.object(rpt, "_explain_empty_result") as explainer:
+			out = rpt.get_data({"include_history": 1}, conditions=("1=1", {}), values={})
+		self.assertEqual(out, [])
+		explainer.assert_called_once()
+		self.assertEqual(len(explainer.call_args.args), 2)
