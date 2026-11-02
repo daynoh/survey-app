@@ -660,6 +660,22 @@ def get_dashboard_stats(include_history=0):
     }
 
 
+def ensure_360_report_live():
+	"""The Employee 360 report must always run live.
+
+	The Prepared Report gate kept re-appearing after MariaDB/migrate syncs even
+	though the report file declares prepared_report = 0, so the UI showed
+	"This is a background report..." with no data. Enforce the flag here so it
+	can never regress — called from after_migrate."""
+	report = "Employee 360 Degree Survey Response"
+	if not frappe.db.exists("Report", report):
+		return
+	if frappe.db.get_value("Report", report, "prepared_report"):
+		frappe.db.set_value("Report", report, "prepared_report", 0)
+		frappe.db.commit()
+		frappe.clear_cache()
+
+
 @frappe.whitelist()
 @survey_admin_required
 def install_workspace():

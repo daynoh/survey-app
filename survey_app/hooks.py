@@ -88,6 +88,7 @@ website_route_rules = [
 
 # before_install = "survey_app.install.before_install"
 # after_install = "survey_app.install.after_install"
+after_migrate = ["survey_app.survey_config.ensure_360_report_live"]
 
 # Uninstallation
 # ------------
